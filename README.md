@@ -25,6 +25,7 @@ TokenMP 的命令行工具。目前提供版本查询、启动与测试转发服
 | `tokenmp test` | 进程内起服务发一条测试请求，见下 | `tokenmp test --model deepseek-chat --dialect claude` |
 | `tokenmp channels <子命令>` | 渠道的增删查，见下 | `tokenmp channels list` |
 | `tokenmp models <子命令>` | 模型路由规则的增删查，见下 | `tokenmp models list --model gpt-4o` |
+| `tokenmp import` | 从 new-api 导出的渠道列表追加渠道与规则，见下 | `tokenmp import --from new-api --file channels.json` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
 | `tokenmp config <子命令>` | 查看与校验配置，见下 | `tokenmp config validate` |
 | `tokenmp completion <子命令>` | 生成并安装 shell 补全，见下 | `tokenmp completion install zsh` |
@@ -309,6 +310,81 @@ $ tokenmp models list --model deepseek-chat
 
 试算里的上游模型名是替换之后的结果，规则表里给的是配置里的原样写法。
 
+## 从 new-api 导入
+
+`tokenmp import` 读一份 new-api 渠道列表接口的响应 JSON，往配置里追加对应的渠道与模型规则。它只吃文件，不连 new-api 的 API、也不读它的数据库。导入改的是配置文件，下一次 `run` 才生效。
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--from` | 无 | 数据源，目前只支持 `new-api` |
+| `--file` | 无 | 导出的 JSON 路径，渠道在响应信封的 `data.items` 里 |
+| `--config` | `config.yaml` | 配置文件路径 |
+| `--dry-run` | 关 | 只打印将要写入的渠道数、规则数与需要的环境变量名，不落盘 |
+
+new-api 后台没有导出渠道的入口，列表 JSON 要自己取：
+
+```
+curl -H "Authorization: Bearer <root token>" https://new-api.example.com/api/channel/ > channels.json
+```
+
+最小的一份样例：
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "name": "openai",
+        "type": 1,
+        "key": "",
+        "base_url": "https://api.openai.com",
+        "models": "gpt-4o,gpt-4o-mini"
+      },
+      {
+        "id": 2,
+        "name": "openrouter",
+        "type": 20,
+        "key": "",
+        "base_url": "https://openrouter.ai/api",
+        "models": "anthropic/claude-sonnet-4"
+      }
+    ],
+    "total": 2,
+    "page": 1,
+    "page_size": 100
+  }
+}
+```
+
+导入并验证：
+
+```
+# 先看将要写什么
+$ tokenmp import --from new-api --file channels.json --dry-run
+
+# 写进配置
+$ tokenmp import --from new-api --file channels.json --config config.yaml
+
+# 依次验证：配置合法、渠道列出、发一条测试请求
+$ tokenmp config validate --config config.yaml
+$ tokenmp channels list --config config.yaml
+export OPENAI_API_KEY=...
+$ tokenmp test --config config.yaml --model gpt-4o
+```
+
+类型到方言的映射：
+
+- OpenAI 兼容的渠道归 `openai`，包含 `1`、`6`、`7`、`9`、`10`、`12`、`13`、`19`、`20`、`22`、`25`、`31`、`40`、`42`、`43`、`47`、`48`、`53`
+- `14` Anthropic 归 `claude`
+- `24` Gemini 与 `41` Vertex AI 归 `gemini`
+- 其余类型（Midjourney、Azure、Perplexity、Cohere、Bedrock 等）不在表里，导入会报错并指出是哪一条渠道，不会静默归到 `openai`
+
+`base_url` 带了路径时会按它算出要写进配置的 `path`：`https://openrouter.ai/api` 配 `/v1/chat/completions`，`https://api.openai.com/v1` 配 `/chat/completions`，两种写法指向同一个上游端点。算不出来（例如 Gemini 的路径含模型名）就跳过并说明。`models` 字段按逗号切分，每个模型写一条规则，`channel` 指向该渠道；渠道名重复时跳过并说明，不写重复条目。
+
+密钥要单独说一句。列表接口查询时 `Omit("key")`，JSON 里 `key` 恒为空串，拿不到明文密钥，因此导入只写 `key_env`，变量值由你自己设，输出里会列出需要设置哪些变量。变量名由渠道名推导，例如 `commandcode` 推出 `COMMANDCODE_API_KEY`；与已用的名字冲突时接 `_2`、`_3`，并在输出里说明。即使 JSON 里手工填了 `key`，也不会写进配置。
+
 ## 插件管理
 
 插件是单文件同步 ECMAScript 模块，放在配置 `plugins.dir` 指向的目录里。是否参与
@@ -462,6 +538,7 @@ make clean
 | [cmd/models_list.go](cmd/models_list.go) | 路由规则表与选路试算 |
 | [cmd/models_create.go](cmd/models_create.go) | 追加路由规则 |
 | [cmd/models_delete.go](cmd/models_delete.go) | 按序号或匹配式删除规则 |
+| [cmd/import.go](cmd/import.go) | 从 new-api 渠道列表 JSON 导入渠道与规则 |
 | [cmd/config_init.go](cmd/config_init.go) | 生成配置骨架 |
 | [cmd/completion.go](cmd/completion.go) | shell 补全：输出脚本与 install |
 | [cmd/style.go](cmd/style.go) | 配色、表格与字段排版 |
@@ -475,8 +552,8 @@ make clean
 | [internal/metrics](internal/metrics/metrics.go) | 账目与指标行的口径：TTFT、TPS |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
-帮助里出现 `help`、`version`、`run`、`test`、`channels`、`models`、`plugin`、`config`
-与 `completion`。fang
+帮助里出现 `help`、`version`、`run`、`test`、`channels`、`models`、`import`、`plugin`、
+`config` 与 `completion`。fang
 自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
 `fang.WithoutManpage()` 一行即可恢复。cobra 的 `completion` 在
 [cmd/completion.go](cmd/completion.go) 里补了中文说明，并挂上 `install` 子命令。
