@@ -183,25 +183,33 @@ func TestImportNewAPIDryRunDoesNotWrite(t *testing.T) {
 	}
 }
 
-func TestImportNewAPIRejectsUnsupportedType(t *testing.T) {
+func TestImportNewAPISkipsUnsupportedType(t *testing.T) {
 	path := configSandbox(t, editableConfig)
-	before := readFile(t, path)
 	file := importFile(t, `{"data":{"items":[
 		{"id": 7, "name": "mj", "type": 2, "base_url": "https://mj.example.com", "models": "midjourney"},
-		{"id": 8, "name": "ghost", "type": 999, "base_url": "https://ghost.example.com", "models": "m"}
+		{"id": 8, "name": "ghost", "type": 999, "base_url": "https://ghost.example.com", "models": "m"},
+		{"id": 9, "name": "openai-main", "type": 1, "base_url": "https://api.openai.com", "models": "gpt-4o"}
 	]}}`)
 
+	// 不在映射表里的类型跳过而不是让整份导入失败：真实实例里常有 Midjourney、
+	// Suno 这类渠道，一条不支持就让命令用不了，代价太大。跳过的条目要逐条列出。
 	out, err := run(t, "import", "--from", "new-api", "--file", file, "--config", path)
-	if err == nil {
-		t.Fatalf("不在映射表里的类型应当报错\n%s", out)
+	if err != nil {
+		t.Fatalf("不在映射表里的类型应当跳过而不是报错: %v\n%s", err, out)
 	}
-	for _, want := range []string{"mj", "2", "Midjourney", "ghost", "999"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("报错里没有 %q: %v", want, err)
+	for _, want := range []string{"跳过 2 条", "mj", "Midjourney", "ghost", "999"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出里没有 %q:\n%s", want, out)
 		}
 	}
-	if after := readFile(t, path); after != before {
-		t.Errorf("报错时不该改配置文件:\n%s", after)
+
+	// 同一份文件里能支持的渠道照常导入。
+	after := readFile(t, path)
+	if !strings.Contains(after, "openai-main") {
+		t.Errorf("同一份文件里支持的渠道应当导入:\n%s", after)
+	}
+	if strings.Contains(after, "midjourney") || strings.Contains(after, "ghost") {
+		t.Errorf("跳过的渠道不该写进配置:\n%s", after)
 	}
 }
 

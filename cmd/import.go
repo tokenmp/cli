@@ -342,7 +342,6 @@ func buildImportPlan(cfg *config.Config, data []byte) (*importPlan, error) {
 	}
 	seenInFile := make(map[string]bool, len(raw))
 
-	var unsupported []string
 	for _, item := range raw {
 		name := strings.TrimSpace(item.Name)
 		if name == "" {
@@ -360,11 +359,14 @@ func buildImportPlan(cfg *config.Config, data []byte) (*importPlan, error) {
 
 		mapped, known := newAPIChannelTypeByID(item.Type)
 		if !known || mapped.dialect == "" {
-			detail := fmt.Sprintf("%s（类型 %d）", name, item.Type)
+			// 类型不在支持的映射表里当作跳过，而不是让整份导入失败：new-api 的实例
+			// 里常有 Midjourney、Suno、Azure 这类渠道，一条不支持就让命令用不了，
+			// 代价太大。跳过的条目在输出里逐条列出，不会静默丢掉。
+			reason := fmt.Sprintf("类型 %d 不在支持的映射表里，需要手工建，先确认上游协议再选方言", item.Type)
 			if known {
-				detail = fmt.Sprintf("%s（类型 %d %s）", name, item.Type, mapped.name)
+				reason = fmt.Sprintf("类型 %d %s 不在支持的映射表里，需要手工建，先确认上游协议再选方言", item.Type, mapped.name)
 			}
-			unsupported = append(unsupported, detail)
+			plan.skips = append(plan.skips, importSkip{name: name, reason: reason})
 			continue
 		}
 
@@ -419,11 +421,6 @@ func buildImportPlan(cfg *config.Config, data []byte) (*importPlan, error) {
 			rules[model+importRuleKeySeparator+name] = true
 			plan.rules = append(plan.rules, importRule{entry: modelEntry{Match: model, Channel: name}})
 		}
-	}
-
-	if len(unsupported) > 0 {
-		return nil, fmt.Errorf("有 %d 条渠道的类型不在支持的映射表里：%s。这些渠道需要手工建，先确认上游协议再选方言",
-			len(unsupported), joinList(unsupported))
 	}
 
 	// 规则引用的渠道必须在导入后存在。上面只在能建出渠道时才追加规则，这里再兜一遍，
