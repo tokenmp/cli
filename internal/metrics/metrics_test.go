@@ -25,7 +25,7 @@ func TestFieldsStreamingWithUsage(t *testing.T) {
 		Streaming: true,
 		Duration:  10 * time.Second,
 		FirstByte: 2 * time.Second,
-		Usage:     &server.Usage{PromptTokens: 20696, CompletionTokens: 74, TotalTokens: 20770},
+		Usage:     &server.Usage{PromptTokens: 20696, CompletionTokens: 74, TotalTokens: 20770, CachedTokens: 20000},
 	}
 
 	fields := Fields(outcome)
@@ -43,6 +43,7 @@ func TestFieldsStreamingWithUsage(t *testing.T) {
 	for key, want := range map[string]any{
 		"request_id": "7", "model": "deepseek-chat", "channel": "commandcode",
 		"prompt_tokens": 20696, "completion_tokens": 74, "total_tokens": 20770,
+		"cache_read_tokens": 20000, "cache_hit_rate": 0.966,
 	} {
 		if got := fieldValue(fields, key); got != want {
 			t.Errorf("%s 是 %v，期望 %v", key, got, want)
@@ -122,18 +123,33 @@ func TestFieldsZeroGenerationWindow(t *testing.T) {
 	}
 }
 
-func TestFieldsCachedTokens(t *testing.T) {
+func TestFieldsCache(t *testing.T) {
+	// 提示词总数 1000，其中 640 命中缓存，命中率 0.64。
 	outcome := server.Outcome{
 		RequestID: "12",
-		Usage:     &server.Usage{PromptTokens: 100, TotalTokens: 110, CachedTokens: 64},
+		Usage:     &server.Usage{PromptTokens: 1000, TotalTokens: 1010, CachedTokens: 640},
 	}
-	if got := fieldValue(Fields(outcome), "cached_tokens"); got != 64 {
-		t.Errorf("cached_tokens 是 %v，期望 64", got)
+	fields := Fields(outcome)
+	if got := fieldValue(fields, "cache_read_tokens"); got != 640 {
+		t.Errorf("cache_read_tokens 是 %v，期望 640", got)
+	}
+	if got := fieldValue(fields, "cache_hit_rate"); got != 0.64 {
+		t.Errorf("cache_hit_rate 是 %v，期望 0.64", got)
 	}
 
-	// 没有缓存命中时不写这个字段。
+	// 上游不报缓存用量时这两个字段都不写：分不出「没命中」与「不报」。
 	outcome.Usage.CachedTokens = 0
-	if got := fieldValue(Fields(outcome), "cached_tokens"); got != nil {
-		t.Errorf("没有缓存命中时不该有 cached_tokens: %v", got)
+	fields = Fields(outcome)
+	if got := fieldValue(fields, "cache_read_tokens"); got != nil {
+		t.Errorf("没有缓存读时不该有 cache_read_tokens: %v", got)
+	}
+	if got := fieldValue(fields, "cache_hit_rate"); got != nil {
+		t.Errorf("没有缓存读时不该有 cache_hit_rate: %v", got)
+	}
+
+	// 命中率保留三位小数。
+	outcome.Usage = &server.Usage{PromptTokens: 3, TotalTokens: 3, CachedTokens: 1}
+	if got := fieldValue(Fields(outcome), "cache_hit_rate"); got != 0.333 {
+		t.Errorf("cache_hit_rate 是 %v，期望 0.333", got)
 	}
 }

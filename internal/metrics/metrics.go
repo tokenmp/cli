@@ -30,7 +30,10 @@ func Fields(outcome server.Outcome) []any {
 			"completion_tokens", outcome.Usage.CompletionTokens,
 			"total_tokens", outcome.Usage.TotalTokens)
 		if outcome.Usage.CachedTokens > 0 {
-			fields = append(fields, "cached_tokens", outcome.Usage.CachedTokens)
+			fields = append(fields, "cache_read_tokens", outcome.Usage.CachedTokens)
+		}
+		if rate, ok := cacheHitRate(*outcome.Usage); ok {
+			fields = append(fields, "cache_hit_rate", rate)
 		}
 	}
 	if ttft, ok := timeToFirstToken(outcome); ok {
@@ -44,6 +47,21 @@ func Fields(outcome server.Outcome) []any {
 		return nil
 	}
 	return fields
+}
+
+// cacheHitRate 返回缓存命中率，取值在 0 到 1 之间，保留三位小数。
+//
+// 分母是提示词总数，它含缓存读与缓存写：上游的原始计数里三者是分开的，归一之后
+// 提示词总数才是完整的那份。分子只算缓存读，缓存写是新写入的部分，不算命中。
+//
+// 只在缓存读大于零时给值。上游不报缓存用量时这个字段也是零，与「报了但没命中」
+// 分不开，宁可不写，也不写一个可能读错意思的 0。
+func cacheHitRate(usage server.Usage) (float64, bool) {
+	if usage.CachedTokens <= 0 || usage.PromptTokens <= 0 {
+		return 0, false
+	}
+	rate := float64(usage.CachedTokens) / float64(usage.PromptTokens)
+	return math.Round(rate*1000) / 1000, true
 }
 
 // timeToFirstToken 返回首字节延迟，只对流式请求给值。

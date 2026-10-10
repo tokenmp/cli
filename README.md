@@ -75,10 +75,19 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 
 | 字段 | 口径 |
 | --- | --- |
-| `prompt_tokens`、`completion_tokens`、`total_tokens` | 上游给出的用量 |
-| `cached_tokens` | 命中提示缓存的那部分，有命中时才写 |
+| `prompt_tokens`、`completion_tokens`、`total_tokens` | 上游给出的用量。提示词总数含缓存读与缓存写 |
+| `cache_read_tokens` | 命中提示缓存的提示词数 |
+| `cache_hit_rate` | 缓存读除以提示词总数，保留三位小数，取值在 0 到 1 之间 |
 | `ttft` | 首字节延迟，只对流式请求写。非流式响应一次写完，这个数约等于总时长 |
 | `tps` | 生成速率，分母是生成时长（总时长减 `ttft`），保留一位小数。预填充与排队不算进去，因此长提示词上不会偏低；非流式请求不写 |
+
+分子只算缓存读：缓存写是新写入的部分，不算命中。上游不报缓存用量时缓存读也是零，
+与「报了但没命中」分不开，因此这两个字段宁可不写，也不写一个可能读错意思的 0。
+
+缓存读与命中率目前看不到：core 取的是 `prompt_cache_hit_tokens`，而跨方言转换之后这个
+字段是空的（缓存读落在 `prompt_tokens_details.cached_tokens` 或
+`input_tokens_details.cached_tokens`），缓存写 core 也没有交出来。这两处修好之后本行会
+自动多出这些字段，cli 不需要再改。
 
 `log.format: json` 时这些字段是结构化的，便于直接收集。用量与指标来自上游的响应，
 同方言透传不解析响应体，因此这类请求只有前两行。
