@@ -1,8 +1,8 @@
 // Package configedit 定点改写配置文件，保留已有注释。
 //
-// core 的 config 包只负责读。管理命令要把启用状态与顺序写回同一份文件，因此这里用
-// yaml.Node 做定点改写：原有节点的注释、引号与顺序都保留，只有被改写的标量重新编码。
-// 缩进统一成两格，空行可能被规范化。
+// core 的 config 包只负责读。管理命令要把字段写回同一份文件，因此这里用 yaml.Node 做
+// 定点改写：原有节点的注释、引号与顺序都保留，只有被改写的标量重新编码。缩进统一成
+// 两格，空行可能被规范化。
 package configedit
 
 import (
@@ -14,10 +14,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SetPluginField 保证 plugins.list 里存在 key 对应的条目，并把 field 设为 value。
+// Apply 改写配置文件：按 change 改写，写回后用 check 校验，校验失败时还原原内容。
 //
-// field 只用于标量字段，目前是 enabled 与 order。
-func SetPluginField(path, key, field string, value any) error {
+// change 拿到的是解析后的文档根节点，因此调用方只描述要改什么；check 为 nil 时不校验。
+func Apply(path string, change func(document *yaml.Node) error, check func() error) error {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("读取配置文件 %s 失败: %w", path, err)
@@ -27,35 +27,80 @@ func SetPluginField(path, key, field string, value any) error {
 	if err := yaml.Unmarshal(source, &document); err != nil {
 		return fmt.Errorf("解析配置文件 %s 失败: %w", path, err)
 	}
-
-	root, err := rootMapping(&document)
-	if err != nil {
+	if err := change(&document); err != nil {
 		return fmt.Errorf("配置文件 %s: %w", path, err)
 	}
-	plugins, err := childMapping(root, "plugins")
-	if err != nil {
-		return fmt.Errorf("配置文件 %s: %w", path, err)
-	}
-	list, err := childSequence(plugins, "list")
-	if err != nil {
-		return fmt.Errorf("配置文件 %s: %w", path, err)
+	if err := write(path, source, &document); err != nil {
+		return err
 	}
 
-	item := findKey(list, key)
-	if item == nil {
-		item = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		item.Content = append(item.Content, scalarNode("key"), scalarNode(key))
-		list.Content = append(list.Content, item)
+	if check == nil {
+		return nil
 	}
-	if err := setField(item, field, value); err != nil {
-		return fmt.Errorf("配置文件 %s: %w", path, err)
+	if err := check(); err != nil {
+		if restoreErr := restore(path, source); restoreErr != nil {
+			return fmt.Errorf("改写后配置不合法（%v），还原 %s 也失败: %w", err, path, restoreErr)
+		}
+		return fmt.Errorf("改写后配置不合法，已还原 %s: %w", path, err)
 	}
-
-	return write(path, source, &document)
+	return nil
 }
 
-// Restore 把内容原子写回文件，权限沿用原文件。
-func Restore(path string, data []byte) error {
+// SetScalar 把点分路径上的标量设为 value，中间缺失的映射会补出来。
+//
+// 路径只走映射。遇到序列请用 SetPluginField。
+func SetScalar(path string, keys []string, value any, check func() error) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("配置文件 %s: 路径为空", path)
+	}
+	return Apply(path, func(document *yaml.Node) error {
+		root, err := rootMapping(document)
+		if err != nil {
+			return err
+		}
+		current := root
+		for _, key := range keys[:len(keys)-1] {
+			next, err := childMapping(current, key)
+			if err != nil {
+				return err
+			}
+			current = next
+		}
+		return setField(current, keys[len(keys)-1], value)
+	}, check)
+}
+
+// SetPluginField 保证 plugins.list 里存在 key 对应的条目，并把 field 设为 value。
+//
+// field 只用于标量字段，目前是 enabled 与 order。plugins.list 是序列，元素按 key
+// 字段匹配，因此不能走 SetScalar 的映射路径。
+func SetPluginField(path, key, field string, value any, check func() error) error {
+	return Apply(path, func(document *yaml.Node) error {
+		root, err := rootMapping(document)
+		if err != nil {
+			return err
+		}
+		plugins, err := childMapping(root, "plugins")
+		if err != nil {
+			return err
+		}
+		list, err := childSequence(plugins, "list")
+		if err != nil {
+			return err
+		}
+
+		item := findKey(list, key)
+		if item == nil {
+			item = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			item.Content = append(item.Content, scalarNode("key"), scalarNode(key))
+			list.Content = append(list.Content, item)
+		}
+		return setField(item, field, value)
+	}, check)
+}
+
+// restore 把内容原子写回文件，权限沿用原文件。
+func restore(path string, data []byte) error {
 	mode := fs.FileMode(0o600)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
@@ -85,7 +130,7 @@ func write(path string, source []byte, document *yaml.Node) error {
 	if bytes.Equal(buffer.Bytes(), source) {
 		return nil
 	}
-	return Restore(path, buffer.Bytes())
+	return restore(path, buffer.Bytes())
 }
 
 // rootMapping 返回文档的根映射，空文档补一个空映射。

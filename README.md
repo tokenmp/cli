@@ -10,6 +10,7 @@ TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组
 | [charmbracelet/fang](https://github.com/charmbracelet/fang) | 帮助与错误渲染，提供 `--version` 与 `-v` |
 | [charmbracelet/lipgloss](https://charm.land/lipgloss) | 表格与字段的着色 |
 | [charmbracelet/colorprofile](https://github.com/charmbracelet/colorprofile) | 按终端能力降级颜色 |
+| [alecthomas/chroma](https://github.com/alecthomas/chroma) | 配置文本的语法高亮，bat 用的也是它 |
 | [tokenmp/core](https://github.com/tokenmp/core) | 插件宿主、配置模型与插件接口定义 |
 
 ## 命令
@@ -21,10 +22,104 @@ TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组
 | `tokenmp --version`、`tokenmp -v` | 单行版本，例如 `tokenmp version dev (8c6f342)` | `tokenmp -v` |
 | `tokenmp version` | 版本表，字段为 commit、built、go、platform | `tokenmp version` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
+| `tokenmp config <子命令>` | 查看与校验配置，见下 | `tokenmp config validate` |
 | `tokenmp` | 不带参数时打印帮助 | `tokenmp` |
 
 命令失败时以状态码 1 退出，错误信息由 fang 上色。中文错误文案不带句点，
 也不把首词大写，这两处与 fang 的默认处理器不同。
+
+## 配置
+
+配置是单个 YAML 文件，解码时开启 `KnownFields`，拼错的字段在加载时报错。相对路径
+以配置文件所在目录为基准。
+
+| 子命令 | 作用 | 示例 |
+| --- | --- | --- |
+| `config path` | 配置文件路径、状态与插件目录 | `tokenmp config path --json` |
+| `config show` | 打印生效配置，默认是概览视图 | `tokenmp config show --format yaml` |
+| `config validate` | 校验并列出全部问题，不通过时退出码 1 | `tokenmp config validate` |
+| `config get <路径>` | 按点分路径取一个字段 | `tokenmp config get channels.0.base_url` |
+| `config set <路径> <值>` | 改一个标量字段 | `tokenmp config set log.level debug` |
+| `config channels` | 列出渠道，凭据只显示环境变量名 | `tokenmp config channels` |
+| `config models` | 列出路由规则，或按模型名试算选路 | `tokenmp config models --model gpt-4o` |
+| `config init` | 生成配置骨架 | `tokenmp config init --config /etc/tokenmp/config.yaml` |
+
+两个标志对整组生效：
+
+| 标志 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--config` | `config.yaml` | 配置文件路径 |
+| `--json` | 关 | 机器可读输出，除 `config init` 外都支持 |
+```
+tokenmp config path
+tokenmp config show
+tokenmp config show --format yaml > /tmp/effective.yaml
+tokenmp config validate --json
+tokenmp config get listen
+tokenmp config get plugins.list
+tokenmp config set log.level debug
+tokenmp config set plugins.dir /srv/tokenmp/plugins
+tokenmp config channels
+tokenmp config models --model claude-sonnet-4
+tokenmp config init --config /etc/tokenmp/config.yaml
+```
+
+`config show` 支持三种格式，用 `--format` 选，默认是 `ui`：
+
+| 格式 | 输出 |
+| --- | --- |
+| `ui` | 高亮的配置文本：YAML 按语法上色，左边一列行号，顶上一条表头 |
+| `yaml` | 不带装饰的配置文本，可以重定向成一份新配置 |
+| `json` | 机器可读的形状，`--json` 等同于此项 |
+
+高亮用 chroma，bat 用的也是它，主题按终端明暗在 monokai 与 monokailight 之间选。
+输出不是终端时 `ui` 与 `yaml` 完全一致，行号与表头不会混进重定向的文件。
+
+```
+$ tokenmp config show
+─── /etc/tokenmp/config.yaml ─────────────────────────────────────────────
+ 1 │ listen: 127.0.0.1:8787
+ 2 │ log:
+ 3 │   format: text
+ 4 │   level: info
+ 5 │ channels:
+ 6 │   - name: openrouter
+ 7 │     dialect: openai
+ 8 │     base_url: https://openrouter.ai/api/v1
+ 9 │     auth:
+10 │       style: bearer
+11 │       key_env: OPENROUTER_API_KEY
+12 │     timeout: 2m0s
+13 │     max_retries: 0
+14 │ models:
+15 │   - match: gpt-*
+16 │     channel: openrouter
+17 │ plugins:
+18 │   dir: /etc/tokenmp/plugins
+19 │   list:
+20 │     - key: echo
+21 │       enabled: true
+22 │       order: 10
+23 │       config:
+24 │         tag: example
+```
+
+`show` 与 `get` 看到的是填过默认值之后的生效配置，不是文件原文，因此没写在文件里的
+`listen`、`timeout`、`max_retries` 也会出现。`yaml` 与 `json` 两种格式不打印空值字段：
+空字符串、空段落与空列表只表示没写，没有信息量。
+
+`get` 的路径与配置文件同形，数字段表示数组下标，可以取到 `channels.0.base_url` 这样的
+嵌套取值。取到的段落或列表按 JSON 输出。
+
+`set` 只改标量字段：路径必须已经存在，或者属于 `listen`、`log.format`、`log.level`、
+`plugins.dir` 这四个顶层标量。指向段落或列表的路径会被拒绝。改写保留注释与缩进，
+写回后重新加载校验，不合法就还原原文件，因此把 `log.level` 改成不认识的取值会失败，
+而不是留下一份坏配置。
+
+`channels` 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。缺凭据的渠道会
+在表下列出。
+
+渠道与模型规则的增删改还没有对应命令，这几处结构复杂，直接在配置文件里写更直接。
 
 ## 插件管理
 
@@ -126,28 +221,56 @@ make clean
 | [cmd/plugin_state.go](cmd/plugin_state.go) | 启用、停用与顺序 |
 | [cmd/plugin_hooks.go](cmd/plugin_hooks.go) | 钩子与限额说明 |
 | [cmd/plugin_new.go](cmd/plugin_new.go) | 生成插件骨架 |
+| [cmd/config.go](cmd/config.go) | `config` 命令组与共用标志 |
+| [cmd/config_path.go](cmd/config_path.go) | 配置文件路径与状态 |
+| [cmd/config_show.go](cmd/config_show.go) | 生效配置，填过默认值并去掉空值 |
+| [cmd/config_validate.go](cmd/config_validate.go) | 校验并列出全部问题 |
+| [cmd/config_get.go](cmd/config_get.go) | 按路径取值 |
+| [cmd/config_set.go](cmd/config_set.go) | 改写一个标量字段 |
+| [cmd/config_channels.go](cmd/config_channels.go) | 渠道表与凭据状态 |
+| [cmd/config_models.go](cmd/config_models.go) | 路由规则与选路试算 |
+| [cmd/config_init.go](cmd/config_init.go) | 生成配置骨架 |
 | [cmd/style.go](cmd/style.go) | 配色、表格与字段排版 |
 | [cmd/errors.go](cmd/errors.go) | 错误渲染，去掉了英文句点与首词大写 |
 | [internal/pluginmgr](internal/pluginmgr/env.go) | 配置、插件目录与宿主的装配 |
-| [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写 |
+| [internal/configmgr](internal/configmgr/configmgr.go) | 配置的加载、路径取值与标量改写 |
+| [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写与校验回滚 |
+| [internal/highlight](internal/highlight/highlight.go) | 配置文本的语法高亮，主题按终端明暗选 |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
-帮助里只出现 `help`、`version` 与 `plugin`。cobra 自带的 `completion` 与 fang
+帮助里只出现 `help`、`version`、`plugin` 与 `config`。cobra 自带的 `completion` 与 fang
 自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
 `fang.WithoutCompletions()`、`fang.WithoutManpage()` 两行即可恢复。
 
 ## 依赖 core 的接线
 
-core 尚未发布 tag，本地开发用 `replace` 指向同级目录，两边的改动一起生效：
+`go.mod` 里写的是发布用的版本，开发时靠一个不提交的 `go.work` 指到同级的 core：
 
 ```
-require github.com/tokenmp/core v0.0.0
-replace github.com/tokenmp/core => ../core
+# go.mod，发布构建看到的就是这一行
+require github.com/tokenmp/core v0.1.0
 ```
 
-core 发布 tag 后删掉 `replace`，把 `require` 改成具体版本即可。届时本仓库要按 tag
-依赖，与 core 的公开面兼容承诺一致。core 是纯库，`dialect`、`relay`、`channel`、
-`plugin`、`config`、`server` 六个包对外可见。
+```
+# go.work，只在本机存在，已在 .gitignore 里
+use (
+	.
+	../core
+)
+```
+
+同目录下同时检出两个仓库时，跑一次就有本地开发环境：
+
+```
+go work init . && go work use ../core
+```
+
+两种路径都实测过：带 `go.work` 时 `go list -m -f '{{.Dir}}' github.com/tokenmp/core`
+指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.1.0，`go mod tidy && go build`
+直接可用。发布构建因此不需要额外步骤，也不会因为本机存在同级目录而悄悄换掉依赖。
+
+升级 core 时改 `require` 里的版本号，并重跑测试。core 是纯库，`dialect`、`relay`、
+`channel`、`plugin`、`config`、`server` 六个包对外可见，公开面一旦发布就是兼容承诺。
 
 ## 本机注意
 

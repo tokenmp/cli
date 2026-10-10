@@ -24,9 +24,9 @@ func newPluginReplayCmd(opts *pluginOptions) *cobra.Command {
 		Short: "用 fixture 回放单个插件",
 		Long: `用 fixture 回放单个插件。
 
-fixture 的形状与 new-api 的任务插件一致：一组用例，每条给出钩子、参数、期望值或
-期望的错误子串。回放把 host.now() 固定在 fixture 的 unixNow 上，时间戳与签名类
-钩子因此可复现。钩子返回 null 表示不改写，回放按 null 比较。
+fixture 的形状与 new-api 的任务插件一致：一组用例，每条给出钩子、参数、期望值或期望的错误子串。
+回放把 host.now() 固定在 fixture 的 unixNow 上，时间戳与签名类钩子因此可复现。
+钩子返回 null 表示不改写，回放按 null 比较。
 
 有失败用例时以状态码 1 退出。`,
 		Example: `  # 用插件旁边的 fixture

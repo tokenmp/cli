@@ -15,9 +15,10 @@ func newPluginListCmd(opts *pluginOptions) *cobra.Command {
 		Short:   "列出插件与它们的启用状态",
 		Long: `列出插件与它们的启用状态。
 
-顺序即转发时的执行顺序：启用中的插件按 order 升序在前，编译失败的其次，目录里有
-但配置没登记的再次，停用的最后。配置里登记了但目录里没有的插件也列出来，不影响
-其余部分。单个插件编译失败不影响这份列表，失败原因单独列在表后。`,
+顺序即转发时的执行顺序。
+启用中的插件按 order 升序在前，编译失败的其次，目录里有但配置没登记的再次，停用的最后。
+配置里登记了但目录里没有的插件也列出来，不影响其余部分。
+单个插件编译失败不影响这份列表，失败原因单独列在表后。`,
 		Args: cobra.NoArgs,
 		Example: `  # 看插件目录里的全部插件
   tokenmp plugin list
@@ -47,7 +48,11 @@ func newPluginListCmd(opts *pluginOptions) *cobra.Command {
 
 			writer := out(cmd)
 			if len(states) == 0 {
-				fmt.Fprintf(writer, "插件目录 %s 里没有插件\n", env.Dir)
+				if env.Exists() {
+					fmt.Fprintf(writer, "插件目录 %s 里没有插件\n", env.Dir)
+				} else {
+					fmt.Fprintf(writer, "%s\n", palette.warn.Render("插件目录 "+env.Dir+" 不存在"))
+				}
 				return nil
 			}
 

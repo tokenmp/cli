@@ -15,8 +15,9 @@ func newPluginEnableCmd(opts *pluginOptions) *cobra.Command {
 		Short: "启用插件",
 		Long: `启用插件。
 
-把配置 plugins.list 段里对应条目的 enabled 设为 true，条目不存在时补一条。插件
-目录里没有这个 key 时报错，不写配置。写回后重新加载配置校验，校验失败时还原原文件。`,
+把配置 plugins.list 段里对应条目的 enabled 设为 true，条目不存在时补一条。
+插件目录里没有这个 key 时报错，不写配置。
+写回后重新加载配置校验，校验失败时还原原文件。`,
 		Example: `  # 启用一个插件
   tokenmp plugin enable echo
 
@@ -35,8 +36,8 @@ func newPluginDisableCmd(opts *pluginOptions) *cobra.Command {
 		Short: "停用插件",
 		Long: `停用插件。
 
-把配置 plugins.list 段里对应条目的 enabled 设为 false，条目与插件文件都保留。停用
-的插件不参与转发，但仍会出现在 list 与 check 的结果里。`,
+把配置 plugins.list 段里对应条目的 enabled 设为 false，条目与插件文件都保留。
+停用的插件不参与转发，但仍会出现在 list 与 check 的结果里。`,
 		Example: `  # 停用一个插件，配置条目保留
   tokenmp plugin disable echo
 
@@ -55,8 +56,8 @@ func newPluginOrderCmd(opts *pluginOptions) *cobra.Command {
 		Short: "设置插件的执行顺序",
 		Long: `设置插件的执行顺序。
 
-order 越小越先执行，order 相同的插件按配置里的先后顺序执行。改顺序不会改变启用
-状态，插件停用时顺序仍然记在配置里。`,
+order 越小越先执行，order 相同的插件按配置里的先后顺序执行。
+改顺序不会改变启用状态，插件停用时顺序仍然记在配置里。`,
 		Example: `  # 越小的先执行
   tokenmp plugin order echo 10
   tokenmp plugin order html-escape 20

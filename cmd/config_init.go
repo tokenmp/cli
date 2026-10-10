@@ -1,0 +1,85 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/tokenmp/cli/internal/configmgr"
+)
+
+// configTemplate 是 config init 生成的配置骨架。它本身就能通过校验，改掉渠道基址与
+// 凭据环境变量名即可使用。
+const configTemplate = `# tokenmp 配置。凭据只写环境变量名，不写密钥。
+listen: 127.0.0.1:8787
+
+log:
+  format: text
+  level: info
+
+channels:
+  - name: example
+    dialect: openai
+    base_url: https://api.example.com/v1
+    auth:
+      style: bearer
+      key_env: EXAMPLE_API_KEY
+    timeout: 120s
+
+models:
+  - match: "gpt-*"
+    channel: example
+
+plugins:
+  dir: plugins
+  list: []
+`
+
+func newConfigInitCmd(opts *configOptions) *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "生成一份配置骨架",
+		Long: `生成一份配置骨架。
+
+生成的配置带一个渠道、一条模型规则与一个空的插件清单，本身就能通过校验。
+改掉渠道基址与凭据环境变量名之后即可起服务。
+
+配置文件已存在时报错，除非给出 --force。
+所在目录不存在时会创建。`,
+		Example: `  tokenmp config init
+  tokenmp config init --config /etc/tokenmp/config.yaml
+  tokenmp config init --force`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			env, err := configmgr.Open(opts.configPath)
+			if err != nil {
+				return err
+			}
+			if env.HasConfig && !force {
+				return fmt.Errorf("%s 已存在，改一个路径或加 --force", env.ConfigPath)
+			}
+			if err := os.MkdirAll(env.Dir, 0o755); err != nil {
+				return fmt.Errorf("创建目录 %s 失败: %w", env.Dir, err)
+			}
+			if err := os.WriteFile(env.ConfigPath, []byte(configTemplate), 0o644); err != nil {
+				return fmt.Errorf("写入 %s 失败: %w", env.ConfigPath, err)
+			}
+
+			writer := out(cmd)
+			fmt.Fprintf(writer, "%s %s\n\n", palette.ok.Render("已创建"), env.ConfigPath)
+			fmt.Fprintln(writer, strings.Join([]string{
+				fmt.Sprintf("  tokenmp config validate --config %s", env.ConfigPath),
+				fmt.Sprintf("  tokenmp config channels --config %s", env.ConfigPath),
+				fmt.Sprintf("  tokenmp plugin list --config %s", env.ConfigPath),
+			}, "\n"))
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&force, "force", false, "配置文件已存在时覆盖")
+	return cmd
+}
