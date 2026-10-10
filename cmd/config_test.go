@@ -73,22 +73,36 @@ func TestConfigInitThenValidate(t *testing.T) {
 	}
 }
 
-func TestConfigShowFillsDefaultsAndDropsEmpty(t *testing.T) {
+func TestConfigShowOverview(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
 	out, err := run(t, "config", "show", "--config", path)
 	if err != nil {
 		t.Fatalf("config show: %v", err)
 	}
+	for _, want := range []string{"服务", "渠道", "模型路由", "插件目录", "插件清单", "127.0.0.1:9999", "2m0s", "example", "openai"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("概览视图里没有 %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestConfigShowYAML(t *testing.T) {
+	path := configSandbox(t, validConfig)
+
+	out, err := run(t, "config", "show", "--config", path, "--format", "yaml")
+	if err != nil {
+		t.Fatalf("config show --format yaml: %v", err)
+	}
 	for _, want := range []string{"127.0.0.1:9999", "timeout: 2m0s", "max_retries: 0", "dir: " + filepath.Join(filepath.Dir(path), "plugins")} {
 		if !strings.Contains(out, want) {
-			t.Errorf("生效配置里没有 %q:\n%s", want, out)
+			t.Errorf("YAML 里没有 %q:\n%s", want, out)
 		}
 	}
 	// 空值字段不打印。
 	for _, unwanted := range []string{`path: ""`, `upstream: ""`, "list: []", "headers: {}"} {
 		if strings.Contains(out, unwanted) {
-			t.Errorf("生效配置里不该出现 %q:\n%s", unwanted, out)
+			t.Errorf("YAML 里不该出现 %q:\n%s", unwanted, out)
 		}
 	}
 }
@@ -96,25 +110,41 @@ func TestConfigShowFillsDefaultsAndDropsEmpty(t *testing.T) {
 func TestConfigShowJSON(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
-	out, err := run(t, "config", "show", "--config", path, "--json")
-	if err != nil {
-		t.Fatalf("config show --json: %v", err)
-	}
+	// --json 是整组通用的开关，与 --format json 等价。
+	for _, extra := range [][]string{{"--format", "json"}, {"--json"}} {
+		args := append([]string{"config", "show", "--config", path}, extra...)
+		out, err := run(t, args...)
+		if err != nil {
+			t.Fatalf("config show %v: %v", extra, err)
+		}
 
-	var generic map[string]any
-	if err := json.Unmarshal([]byte(out), &generic); err != nil {
-		t.Fatalf("输出不是合法 JSON: %v\n%s", err, out)
+		var generic map[string]any
+		if err := json.Unmarshal([]byte(out), &generic); err != nil {
+			t.Fatalf("输出不是合法 JSON: %v\n%s", err, out)
+		}
+		if generic["listen"] != "127.0.0.1:9999" {
+			t.Errorf("listen 不对: %v", generic["listen"])
+		}
+		channels, ok := generic["channels"].([]any)
+		if !ok || len(channels) != 1 {
+			t.Fatalf("channels 不对: %v", generic["channels"])
+		}
+		first, ok := channels[0].(map[string]any)
+		if !ok || first["dialect"] != "openai" {
+			t.Errorf("渠道字段不对: %v", channels[0])
+		}
 	}
-	if generic["listen"] != "127.0.0.1:9999" {
-		t.Errorf("listen 不对: %v", generic["listen"])
+}
+
+func TestConfigShowRejectsUnknownFormat(t *testing.T) {
+	path := configSandbox(t, validConfig)
+
+	out, err := run(t, "config", "show", "--config", path, "--format", "bogus")
+	if err == nil {
+		t.Fatal("未知格式应当报错")
 	}
-	channels, ok := generic["channels"].([]any)
-	if !ok || len(channels) != 1 {
-		t.Fatalf("channels 不对: %v", generic["channels"])
-	}
-	first, ok := channels[0].(map[string]any)
-	if !ok || first["dialect"] != "openai" {
-		t.Errorf("渠道字段不对: %v", channels[0])
+	if !strings.Contains(out, "ui") || !strings.Contains(out, "yaml") {
+		t.Errorf("错误信息里应当列出可用格式:\n%s", out)
 	}
 }
 

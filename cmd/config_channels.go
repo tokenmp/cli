@@ -43,20 +43,7 @@ path 为空表示按方言取默认路径，timeout 与 max_retries 是填过默
 				return err
 			}
 
-			rows := make([]channelRow, 0, len(env.Config.Channels))
-			for _, channel := range env.Config.Channels {
-				rows = append(rows, channelRow{
-					Name:       channel.Name,
-					Dialect:    channel.Dialect,
-					BaseURL:    channel.BaseURL,
-					Path:       channel.Path,
-					Auth:       authLabel(channel.Auth),
-					Credential: credentialLabel(channel.Auth),
-					Timeout:    channel.Timeout.String(),
-					MaxRetries: retriesOf(channel),
-					Headers:    len(channel.Headers),
-				})
-			}
+			rows := channelRows(env.Config)
 
 			if opts.json {
 				return printJSON(cmd, rows)
@@ -84,6 +71,25 @@ path 为空表示按方言取默认路径，timeout 与 max_retries 是填过默
 			return nil
 		},
 	}
+}
+
+// channelRows 把渠道整理成待输出的形状。config show 的概览视图复用同一份整理结果。
+func channelRows(cfg *config.Config) []channelRow {
+	rows := make([]channelRow, 0, len(cfg.Channels))
+	for _, channel := range cfg.Channels {
+		rows = append(rows, channelRow{
+			Name:       channel.Name,
+			Dialect:    channel.Dialect,
+			BaseURL:    channel.BaseURL,
+			Path:       channel.Path,
+			Auth:       authLabel(channel.Auth),
+			Credential: credentialLabel(channel.Auth),
+			Timeout:    channel.Timeout.String(),
+			MaxRetries: retriesOf(channel),
+			Headers:    len(channel.Headers),
+		})
+	}
+	return rows
 }
 
 // 凭据状态的三种取值。

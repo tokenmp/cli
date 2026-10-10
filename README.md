@@ -35,7 +35,7 @@ TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组
 | 子命令 | 作用 | 示例 |
 | --- | --- | --- |
 | `config path` | 配置文件路径、状态与插件目录 | `tokenmp config path --json` |
-| `config show` | 打印生效配置 | `tokenmp config show > /tmp/effective.yaml` |
+| `config show` | 打印生效配置，默认是概览视图 | `tokenmp config show --format yaml` |
 | `config validate` | 校验并列出全部问题，不通过时退出码 1 | `tokenmp config validate` |
 | `config get <路径>` | 按点分路径取一个字段 | `tokenmp config get channels.0.base_url` |
 | `config set <路径> <值>` | 改一个标量字段 | `tokenmp config set log.level debug` |
@@ -49,10 +49,10 @@ TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组
 | --- | --- | --- |
 | `--config` | `config.yaml` | 配置文件路径 |
 | `--json` | 关 | 机器可读输出，除 `config init` 外都支持 |
-
 ```
 tokenmp config path
 tokenmp config show
+tokenmp config show --format yaml > /tmp/effective.yaml
 tokenmp config validate --json
 tokenmp config get listen
 tokenmp config get plugins.list
@@ -63,9 +63,43 @@ tokenmp config models --model claude-sonnet-4
 tokenmp config init --config /etc/tokenmp/config.yaml
 ```
 
+`config show` 支持三种格式，用 `--format` 选，默认是 `ui`：
+
+| 格式 | 输出 |
+| --- | --- |
+| `ui` | 服务、渠道、模型路由与插件清单分组排列，配色与其余命令一致 |
+| `yaml` | 填过默认值的配置文本，可以重定向成一份新配置 |
+| `json` | 机器可读的形状，`--json` 等同于此项 |
+
+```
+$ tokenmp config show
+config /etc/tokenmp/config.yaml
+
+服务
+ 项          值
+ listen      127.0.0.1:8787
+ log.format  text
+ log.level   info
+
+渠道  1 个
+ 渠道        方言    基址                          路径               鉴权                         凭据    超时  重试
+ openrouter  openai  https://openrouter.ai/api/v1  /chat/completions  bearer ← OPENROUTER_API_KEY  未设置  2m0s  0
+凭据环境变量没有设置：openrouter
+
+模型路由  2 条
+ 匹配      渠道        上游模型        方言
+ gpt-*     openrouter  同请求的模型名  openai（同渠道）
+ claude-*  openrouter  同请求的模型名  openai（同渠道）
+
+插件目录 /etc/tokenmp/plugins
+插件清单  1 条，1 个启用
+ 插件  状态  顺序  配置
+ echo  启用  10    {"tag":"example"}
+```
+
 `show` 与 `get` 看到的是填过默认值之后的生效配置，不是文件原文，因此没写在文件里的
-`listen`、`timeout`、`max_retries` 也会出现。`show` 不打印空值字段：空字符串、空段落
-与空列表只表示没写，没有信息量。
+`listen`、`timeout`、`max_retries` 也会出现。`yaml` 与 `json` 两种格式不打印空值字段：
+空字符串、空段落与空列表只表示没写，没有信息量。
 
 `get` 的路径与配置文件同形，数字段表示数组下标，可以取到 `channels.0.base_url` 这样的
 嵌套取值。取到的段落或列表按 JSON 输出。
