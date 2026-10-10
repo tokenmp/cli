@@ -27,9 +27,7 @@ func Execute(ctx context.Context) error {
 		// 中断信号接到命令的 context 上。run 靠它优雅退出；其余命令收到信号时
 		// context 被取消，第二次信号按默认行为结束进程。
 		fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM),
-		// 只发布 README 里列出的命令，cobra 自带的 completion 与 fang 自带的隐藏
-		// man 命令因此关掉。去掉这两项即可恢复。
-		fang.WithoutCompletions(),
+		// fang 自带的隐藏 man 命令关掉，README 里没有它。
 		fang.WithoutManpage(),
 	)
 }
@@ -62,6 +60,12 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	rootCmd.AddCommand(newVersionCmd(), newRunCmd(), newPluginCmd(), newConfigCmd())
+
+	// completion 命令由 cobra 懒创建。先建出来，好挂上 install 子命令并换中文说明。
+	rootCmd.InitDefaultCompletionCmd()
+	if completionCmd, _, err := rootCmd.Find([]string{"completion"}); err == nil {
+		completionCmd.AddCommand(newCompletionInstallCmd())
+	}
 	localize(rootCmd)
 
 	return rootCmd
@@ -75,6 +79,11 @@ func localize(cmd *cobra.Command) {
 	cmd.InitDefaultHelpFlag()
 	cmd.InitDefaultVersionFlag()
 	cmd.InitDefaultHelpCmd()
+	// completion 命令由 cobra 懒创建，而它的说明也需要中文化。只在根命令上建一次，
+	// 子命令组不需要各自的 completion。
+	if !cmd.HasParent() {
+		cmd.InitDefaultCompletionCmd()
+	}
 
 	if flag := cmd.Flags().Lookup("help"); flag != nil {
 		flag.Usage = "显示帮助"
@@ -84,9 +93,12 @@ func localize(cmd *cobra.Command) {
 	}
 
 	for _, child := range cmd.Commands() {
-		if child.Name() == "help" {
+		switch child.Name() {
+		case "help":
 			child.Short = "显示任意命令的帮助"
 			child.Long = "显示任意命令的帮助。\n\n用法：tokenmp help [命令路径]"
+		case "completion":
+			localizeCompletion(child)
 		}
 		localize(child)
 	}

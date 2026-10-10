@@ -24,6 +24,7 @@ TokenMP 的命令行工具。目前提供版本查询、启动服务与本地插
 | `tokenmp run` | 启动转发服务，见下 | `tokenmp run --config /etc/tokenmp/config.yaml` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
 | `tokenmp config <子命令>` | 查看与校验配置，见下 | `tokenmp config validate` |
+| `tokenmp completion <子命令>` | 生成并安装 shell 补全，见下 | `tokenmp completion install zsh` |
 | `tokenmp` | 不带参数时打印帮助 | `tokenmp` |
 
 命令失败时以状态码 1 退出，错误信息由 fang 上色。中文错误文案不带句点，
@@ -293,6 +294,43 @@ tokenmp plugin new html-escape --name "HTML 转义"
 写回后重新加载校验，配置不合法就还原原文件并报错。`enable` 与 `order` 先确认插件
 目录里有这个 key，不会把不存在的插件写进配置。
 
+## Shell 补全
+
+`tokenmp completion <shell>` 把补全脚本写到标准输出，`tokenmp completion install` 直接
+装进 shell 的查找目录。支持 bash、zsh、fish 与 powershell 四种 shell。
+
+```
+tokenmp completion install            # 不指定则按 $SHELL 猜
+tokenmp completion install zsh
+tokenmp completion install bash --dir ~/.config/bash-completion/completions
+tokenmp completion install bash --dry-run
+```
+
+不指定 shell 时按 `$SHELL` 的基名猜，猜不出会报错并列出可选值。落点按 XDG 约定：
+
+| shell | 落点 |
+| --- | --- |
+| bash | `$XDG_DATA_HOME/bash-completion/completions/tokenmp` |
+| zsh | `$XDG_DATA_HOME/zsh/site-functions/_tokenmp` |
+| fish | `$XDG_CONFIG_HOME/fish/completions/tokenmp.fish` |
+| powershell | 没有补全查找目录，只在 `$PROFILE` 里生效，命令只打印提示不写文件 |
+
+`$XDG_DATA_HOME` 默认 `~/.local/share`，`$XDG_CONFIG_HOME` 默认 `~/.config`，
+前三条与 `mise completion --install` 的落点一致。目录不存在时创建，文件已存在时覆盖，
+重复执行结果相同；`--dry-run` 只看将要写入的路径，不落盘。
+
+zsh 的落点不在默认 `fpath` 里，装完要把下面一行加进 `~/.zshrc`：
+
+```
+fpath+=${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions
+```
+
+PowerShell 没有补全查找目录，只能把下面一行加进 `$PROFILE`：
+
+```
+tokenmp completion powershell | Out-String | Invoke-Expression
+```
+
 ## 构建
 
 ```
@@ -335,6 +373,7 @@ make clean
 | [cmd/config_channels.go](cmd/config_channels.go) | 渠道表与凭据状态 |
 | [cmd/config_models.go](cmd/config_models.go) | 路由规则与选路试算 |
 | [cmd/config_init.go](cmd/config_init.go) | 生成配置骨架 |
+| [cmd/completion.go](cmd/completion.go) | shell 补全：输出脚本与 install |
 | [cmd/style.go](cmd/style.go) | 配色、表格与字段排版 |
 | [cmd/errors.go](cmd/errors.go) | 错误渲染，去掉了英文句点与首词大写 |
 | [internal/pluginmgr](internal/pluginmgr/env.go) | 配置、插件目录与宿主的装配 |
@@ -346,9 +385,10 @@ make clean
 | [internal/metrics](internal/metrics/metrics.go) | 账目与指标行的口径：TTFT、TPS |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
-帮助里只出现 `help`、`version`、`plugin` 与 `config`。cobra 自带的 `completion` 与 fang
-自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
-`fang.WithoutCompletions()`、`fang.WithoutManpage()` 两行即可恢复。
+帮助里出现 `help`、`version`、`run`、`plugin`、`config` 与 `completion`。fang 自带的
+隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉 `fang.WithoutManpage()`
+一行即可恢复。cobra 的 `completion` 在 [cmd/completion.go](cmd/completion.go) 里补了
+中文说明，并挂上 `install` 子命令。
 
 ## 依赖 core 的接线
 
