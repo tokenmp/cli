@@ -1,4 +1,4 @@
-// Package cmd implements the tokenmp command line interface.
+// Package cmd 实现 tokenmp 命令行工具。
 package cmd
 
 import (
@@ -10,9 +10,8 @@ import (
 	"github.com/tokenmp/cli/internal/version"
 )
 
-// Execute builds the command tree and runs it. It returns the error reported by
-// the executed command, if any; fang has already printed a styled message for
-// it by then.
+// Execute 组装命令树并运行。执行的命令报错时原样返回该错误，此时 fang 已经打印过
+// 一份带样式的说明。
 func Execute(ctx context.Context) error {
 	info := version.Current()
 
@@ -21,41 +20,69 @@ func Execute(ctx context.Context) error {
 		NewRootCmd(),
 		fang.WithVersion(info.Version),
 		fang.WithCommit(info.Commit),
-		// Only the commands documented in the README are shipped, so the
-		// generated `completion` and hidden `man` commands are turned off.
-		// Drop these two options to get them back.
+		// 中文错误文案不需要 fang 默认处理器那套英文排版。
+		fang.WithErrorHandler(errorHandler),
+		// 只发布 README 里列出的命令，cobra 自带的 completion 与 fang 自带的隐藏
+		// man 命令因此关掉。去掉这两项即可恢复。
 		fang.WithoutCompletions(),
 		fang.WithoutManpage(),
 	)
 }
 
-// NewRootCmd assembles the whole command tree.
+// NewRootCmd 组装整棵命令树。
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "tokenmp",
-		Short: "TokenMP command line interface",
-		Long: `TokenMP command line interface.
+		Short: "TokenMP 命令行工具",
+		Long: `TokenMP 命令行工具。
 
-Run ` + "`tokenmp help`" + ` for the full command list, or ` + "`tokenmp help <command>`" + `
-for the details of a single command.`,
-		Example: `  # Print the version of this build
+完整命令列表用 ` + "`tokenmp help`" + `，单个命令的说明用 ` + "`tokenmp help <命令>`" + `。`,
+		Example: `  # 打印本次构建的版本
   tokenmp version
 
-  # The same, in its one-line form
+  # 同一份信息的单行形式
   tokenmp --version
 
-  # Learn what else this CLI can do
+  # 查看插件目录里的插件与状态
+  tokenmp plugin list
+
+  # 看看还有哪些命令
   tokenmp help`,
 		Args: cobra.NoArgs,
-		// Version is what `--version`/`-v` reports; fang refreshes it from the
-		// same build metadata when Execute runs.
+		// Version 是 --version/-v 报告的值；Execute 会用同一份构建元数据刷新它。
 		Version: version.Current().String(),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
 
-	rootCmd.AddCommand(newVersionCmd())
+	rootCmd.AddCommand(newVersionCmd(), newPluginCmd())
+	localize(rootCmd)
 
 	return rootCmd
+}
+
+// localize 把 cobra 自动生成的英文说明换成中文。
+//
+// cobra 自己加上 help 子命令、-h/--help 标志与 --version 标志，它们的说明文案是英文，
+// 只有在这里统一改掉，否则帮助页面中英混排。已经写好的说明不会被覆盖。
+func localize(cmd *cobra.Command) {
+	cmd.InitDefaultHelpFlag()
+	cmd.InitDefaultVersionFlag()
+	cmd.InitDefaultHelpCmd()
+
+	if flag := cmd.Flags().Lookup("help"); flag != nil {
+		flag.Usage = "显示帮助"
+	}
+	if flag := cmd.Flags().Lookup("version"); flag != nil {
+		flag.Usage = "显示版本"
+	}
+
+	for _, child := range cmd.Commands() {
+		if child.Name() == "help" {
+			child.Short = "显示任意命令的帮助"
+			child.Long = "显示任意命令的帮助。\n\n用法：tokenmp help [命令路径]"
+		}
+		localize(child)
+	}
 }
