@@ -61,13 +61,19 @@ TokenMP 转发服务
 在跑就能看见全部请求，包括 `/healthz`、`/v1/models` 与未知路径：
 
 ```
-level=INFO msg=请求完成 request_id=1 method=POST path=/v1/chat/completions status=200
-  duration=1.775733ms model=deepseek-chat channel=a attempts=1 client=127.0.0.1
+level=INFO msg=请求完成 request_id=1 method=POST path=/v1/messages status=200
+  duration=2.34122ms model=deepseek-chat channel=a attempts=1 client=127.0.0.1
+level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a
+  prompt_tokens=5 completion_tokens=6 total_tokens=11
 ```
 
 `attempts` 是这次请求试过的候选路由条数。一次请求产生的失败行与完成行共用一个
 `request_id`，报错时用它在日志里筛出整条链路。`log.format: json` 时这些字段是结构化
 的，便于直接收集。
+
+用量单独记一行，`msg=用量统计`，靠 `request_id` 与完成行对上，并带上 `model` 与
+`channel` 以便按模型、渠道汇总；完成行里不再出现这些 token 字段。用量来自上游的
+响应，同方言透传不解析响应体，因此这类请求只有完成行，没有账目行。
 
 启动前会拦下三类问题：配置不合法，凭据环境变量没有设置的渠道，以及配置里启用
 但插件目录里找不到的插件。三种都直接退出，不会带着问题开始监听。

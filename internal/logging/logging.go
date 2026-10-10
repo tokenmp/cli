@@ -15,6 +15,9 @@ import (
 //
 // format 与 level 的取值在 config.Validate 里已经卡过，这里只做映射，遇到意外值
 // 退回到 text 与 info，不额外报错。
+//
+// 写出的 handler 外面还包一层拆行：core 把用量折在完成行里，这里把它拆成单独的
+// 一条账目行，见 split.go。
 func New(log config.Log, w io.Writer) *slog.Logger {
 	options := &slog.HandlerOptions{Level: level(log.Level)}
 	var handler slog.Handler
@@ -23,7 +26,7 @@ func New(log config.Log, w io.Writer) *slog.Logger {
 	} else {
 		handler = slog.NewTextHandler(w, options)
 	}
-	return slog.New(handler)
+	return slog.New(splitUsage(handler))
 }
 
 // level 把配置里的级别名映射成 slog 的级别。
