@@ -10,8 +10,11 @@ import (
 	"github.com/tokenmp/cli/internal/configmgr"
 )
 
-// configTemplate 是 config init 生成的配置骨架。它本身就能通过校验，改掉渠道基址与
-// 凭据环境变量名即可使用。
+// configTemplate 是 config init 生成的配置骨架。它本身就能通过校验，也能直接启动，
+// 改掉渠道基址与凭据环境变量名即可使用。
+//
+// 渠道的 base_url 带了 /v1，因此必须显式给出 path，取值从 /v1 之后算起。这条规则
+// 由渠道构造把关，config validate 不查，漏掉的话要到 run 启动时才报错。
 const configTemplate = `# tokenmp 配置。凭据只写环境变量名，不写密钥。
 listen: 127.0.0.1:8787
 
@@ -23,6 +26,7 @@ channels:
   - name: example
     dialect: openai
     base_url: https://api.example.com/v1
+    path: /chat/completions
     auth:
       style: bearer
       key_env: EXAMPLE_API_KEY
@@ -45,7 +49,7 @@ func newConfigInitCmd(opts *configOptions) *cobra.Command {
 		Short: "生成一份配置骨架",
 		Long: `生成一份配置骨架。
 
-生成的配置带一个渠道、一条模型规则与一个空的插件清单，本身就能通过校验。
+生成的配置带一个渠道、一条模型规则与一个空的插件清单，通过校验也能直接启动。
 改掉渠道基址与凭据环境变量名之后即可起服务。
 
 配置文件已存在时报错，除非给出 --force。

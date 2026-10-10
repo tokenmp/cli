@@ -3,6 +3,8 @@ package cmd
 
 import (
 	"context"
+	"os"
+	"syscall"
 
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
@@ -22,6 +24,9 @@ func Execute(ctx context.Context) error {
 		fang.WithCommit(info.Commit),
 		// 中文错误文案不需要 fang 默认处理器那套英文排版。
 		fang.WithErrorHandler(errorHandler),
+		// 中断信号接到命令的 context 上。run 靠它优雅退出；其余命令收到信号时
+		// context 被取消，第二次信号按默认行为结束进程。
+		fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM),
 		// 只发布 README 里列出的命令，cobra 自带的 completion 与 fang 自带的隐藏
 		// man 命令因此关掉。去掉这两项即可恢复。
 		fang.WithoutCompletions(),
@@ -56,7 +61,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 
-	rootCmd.AddCommand(newVersionCmd(), newPluginCmd(), newConfigCmd())
+	rootCmd.AddCommand(newVersionCmd(), newRunCmd(), newPluginCmd(), newConfigCmd())
 	localize(rootCmd)
 
 	return rootCmd

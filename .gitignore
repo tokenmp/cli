@@ -6,6 +6,9 @@
 go.work
 go.work.sum
 
+# pi 的后台任务与任务清单状态
+.pi/tasks/
+
 # Test and coverage artifacts
 *.out
 *.test

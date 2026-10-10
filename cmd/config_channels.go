@@ -73,7 +73,7 @@ path 为空表示按方言取默认路径，timeout 与 max_retries 是填过默
 	}
 }
 
-// channelRows 把渠道整理成待输出的形状。config show 的概览视图复用同一份整理结果。
+// channelRows 把渠道整理成待输出的形状，供 config channels 使用。
 func channelRows(cfg *config.Config) []channelRow {
 	rows := make([]channelRow, 0, len(cfg.Channels))
 	for _, channel := range cfg.Channels {
