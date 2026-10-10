@@ -41,11 +41,7 @@ show 默认给高亮的配置文本，yaml 与 json 两种纯文本格式用 --f
   tokenmp config get channels.0.base_url
 
   # 改一个标量字段
-  tokenmp config set log.level debug
-
-  # 看渠道与模型路由
-  tokenmp config channels
-  tokenmp config models --model gpt-4o`,
+  tokenmp config set log.level debug`,
 	}
 
 	flags := cmd.PersistentFlags()
@@ -58,8 +54,6 @@ show 默认给高亮的配置文本，yaml 与 json 两种纯文本格式用 --f
 		newConfigValidateCmd(opts),
 		newConfigGetCmd(opts),
 		newConfigSetCmd(opts),
-		newConfigChannelsCmd(opts),
-		newConfigModelsCmd(opts),
 		newConfigInitCmd(opts),
 	)
 

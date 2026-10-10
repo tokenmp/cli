@@ -77,7 +77,7 @@ func newConfigInitCmd(opts *configOptions) *cobra.Command {
 			fmt.Fprintf(writer, "%s %s\n\n", palette.ok.Render("已创建"), env.ConfigPath)
 			fmt.Fprintln(writer, strings.Join([]string{
 				fmt.Sprintf("  tokenmp config validate --config %s", env.ConfigPath),
-				fmt.Sprintf("  tokenmp config channels --config %s", env.ConfigPath),
+				fmt.Sprintf("  tokenmp channels list --config %s", env.ConfigPath),
 				fmt.Sprintf("  tokenmp plugin list --config %s", env.ConfigPath),
 			}, "\n"))
 			return nil

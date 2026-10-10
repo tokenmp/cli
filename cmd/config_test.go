@@ -285,12 +285,12 @@ func TestConfigValidateMissingFile(t *testing.T) {
 	}
 }
 
-func TestConfigChannels(t *testing.T) {
+func TestChannelsList(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
-	out, err := run(t, "config", "channels", "--config", path)
+	out, err := run(t, "channels", "list", "--config", path)
 	if err != nil {
-		t.Fatalf("config channels: %v", err)
+		t.Fatalf("channels list: %v", err)
 	}
 	for _, want := range []string{"example", "openai", "bearer ← TOKENMP_TEST_KEY", credentialMissing} {
 		if !strings.Contains(out, want) {
@@ -302,9 +302,9 @@ func TestConfigChannels(t *testing.T) {
 	}
 
 	t.Setenv("TOKENMP_TEST_KEY", "secret")
-	out, err = run(t, "config", "channels", "--config", path)
+	out, err = run(t, "channels", "list", "--config", path)
 	if err != nil {
-		t.Fatalf("config channels: %v", err)
+		t.Fatalf("channels list: %v", err)
 	}
 	if !strings.Contains(out, credentialPresent) {
 		t.Errorf("设了环境变量之后应当报告已设置:\n%s", out)
@@ -314,12 +314,12 @@ func TestConfigChannels(t *testing.T) {
 	}
 }
 
-func TestConfigChannelsJSON(t *testing.T) {
+func TestChannelsListJSON(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
-	out, err := run(t, "config", "channels", "--config", path, "--json")
+	out, err := run(t, "channels", "list", "--config", path, "--json")
 	if err != nil {
-		t.Fatalf("config channels --json: %v", err)
+		t.Fatalf("channels list --json: %v", err)
 	}
 
 	var rows []channelRow
@@ -331,12 +331,12 @@ func TestConfigChannelsJSON(t *testing.T) {
 	}
 }
 
-func TestConfigModels(t *testing.T) {
+func TestModelsList(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
-	out, err := run(t, "config", "models", "--config", path)
+	out, err := run(t, "models", "list", "--config", path)
 	if err != nil {
-		t.Fatalf("config models: %v", err)
+		t.Fatalf("models list: %v", err)
 	}
 	for _, want := range []string{"gpt-*", "example", "同请求的模型名", "openai（同渠道）"} {
 		if !strings.Contains(out, want) {
@@ -344,9 +344,9 @@ func TestConfigModels(t *testing.T) {
 		}
 	}
 
-	resolved, err := run(t, "config", "models", "--model", "gpt-4o", "--config", path)
+	resolved, err := run(t, "models", "list", "--model", "gpt-4o", "--config", path)
 	if err != nil {
-		t.Fatalf("config models --model: %v", err)
+		t.Fatalf("models list --model: %v", err)
 	}
 	for _, want := range []string{"候选路由", "gpt-4o"} {
 		if !strings.Contains(resolved, want) {
@@ -354,21 +354,21 @@ func TestConfigModels(t *testing.T) {
 		}
 	}
 
-	unmatched, err := run(t, "config", "models", "--model", "llama-3", "--config", path)
+	unmatched, err := run(t, "models", "list", "--model", "llama-3", "--config", path)
 	if err != nil {
-		t.Fatalf("config models --model: %v", err)
+		t.Fatalf("models list --model: %v", err)
 	}
 	if !strings.Contains(unmatched, "没有匹配的规则") {
 		t.Errorf("没匹配时应当明说:\n%s", unmatched)
 	}
 }
 
-func TestConfigModelsJSON(t *testing.T) {
+func TestModelsListJSON(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
-	out, err := run(t, "config", "models", "--model", "gpt-4o", "--config", path, "--json")
+	out, err := run(t, "models", "list", "--model", "gpt-4o", "--config", path, "--json")
 	if err != nil {
-		t.Fatalf("config models --json: %v", err)
+		t.Fatalf("models list --json: %v", err)
 	}
 
 	var result modelsOutput
@@ -377,6 +377,9 @@ func TestConfigModelsJSON(t *testing.T) {
 	}
 	if len(result.Rules) != 1 || len(result.Routes) != 1 {
 		t.Fatalf("规则或路由数量不对: %+v", result)
+	}
+	if result.Rules[0].Index != 0 || result.Rules[0].Match != "gpt-*" {
+		t.Errorf("规则里的序号或匹配式不对: %+v", result.Rules[0])
 	}
 	if result.Routes[0].Upstream != "gpt-4o" || result.Routes[0].Dialect != "openai" {
 		t.Errorf("候选路由不对: %+v", result.Routes[0])
@@ -412,32 +415,32 @@ models:
     affinity: accounts
 `
 
-func TestConfigModelsPlaceholderAndAffinity(t *testing.T) {
+func TestModelsListPlaceholderAndAffinity(t *testing.T) {
 	path := configSandbox(t, affinityConfig)
 
-	rules, err := run(t, "config", "models", "--config", path)
+	rules, err := run(t, "models", "list", "--config", path)
 	if err != nil {
-		t.Fatalf("config models: %v\n%s", err, rules)
+		t.Fatalf("models list: %v\n%s", err, rules)
 	}
-	// 规则表给出配置里的原样写法，亲和组名也在表里。
-	for _, want := range []string{"deepseek/${model}", "同请求的模型名", "accounts"} {
+	// 规则表给出配置里的原样写法，亲和组名与 0 起的序号都在表里。
+	for _, want := range []string{"deepseek/${model}", "同请求的模型名", "accounts", "序号"} {
 		if !strings.Contains(rules, want) {
 			t.Errorf("规则表里没有 %q:\n%s", want, rules)
 		}
 	}
 
-	trial, err := run(t, "config", "models", "--config", path, "--model", "deepseek-chat")
+	trial, err := run(t, "models", "list", "--config", path, "--model", "deepseek-chat")
 	if err != nil {
-		t.Fatalf("config models --model: %v\n%s", err, trial)
+		t.Fatalf("models list --model: %v\n%s", err, trial)
 	}
 	// 试算给出替换之后的名字：deepseek/${model} 配上 deepseek-chat。
 	if !strings.Contains(trial, "deepseek/deepseek-chat") {
 		t.Errorf("试算没有替换占位符:\n%s", trial)
 	}
 
-	out, err := run(t, "config", "models", "--config", path, "--model", "deepseek-chat", "--json")
+	out, err := run(t, "models", "list", "--config", path, "--model", "deepseek-chat", "--json")
 	if err != nil {
-		t.Fatalf("config models --json: %v\n%s", err, out)
+		t.Fatalf("models list --json: %v\n%s", err, out)
 	}
 	var result modelsOutput
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
