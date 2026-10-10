@@ -235,6 +235,7 @@ make clean
 | [internal/pluginmgr](internal/pluginmgr/env.go) | 配置、插件目录与宿主的装配 |
 | [internal/configmgr](internal/configmgr/configmgr.go) | 配置的加载、路径取值与标量改写 |
 | [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写与校验回滚 |
+| [internal/highlight](internal/highlight/highlight.go) | 配置文本的语法高亮，主题按终端明暗选 |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
 帮助里只出现 `help`、`version`、`plugin` 与 `config`。cobra 自带的 `completion` 与 fang
@@ -243,16 +244,33 @@ make clean
 
 ## 依赖 core 的接线
 
-core 尚未发布 tag，本地开发用 `replace` 指向同级目录，两边的改动一起生效：
+`go.mod` 里写的是发布用的版本，开发时靠一个不提交的 `go.work` 指到同级的 core：
 
 ```
-require github.com/tokenmp/core v0.0.0
-replace github.com/tokenmp/core => ../core
+# go.mod，发布构建看到的就是这一行
+require github.com/tokenmp/core v0.1.0
 ```
 
-core 发布 tag 后删掉 `replace`，把 `require` 改成具体版本即可。届时本仓库要按 tag
-依赖，与 core 的公开面兼容承诺一致。core 是纯库，`dialect`、`relay`、`channel`、
-`plugin`、`config`、`server` 六个包对外可见。
+```
+# go.work，只在本机存在，已在 .gitignore 里
+use (
+	.
+	../core
+)
+```
+
+同目录下同时检出两个仓库时，跑一次就有本地开发环境：
+
+```
+go work init . && go work use ../core
+```
+
+两种路径都实测过：带 `go.work` 时 `go list -m -f '{{.Dir}}' github.com/tokenmp/core`
+指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.1.0，`go mod tidy && go build`
+直接可用。发布构建因此不需要额外步骤，也不会因为本机存在同级目录而悄悄换掉依赖。
+
+升级 core 时改 `require` 里的版本号，并重跑测试。core 是纯库，`dialect`、`relay`、
+`channel`、`plugin`、`config`、`server` 六个包对外可见，公开面一旦发布就是兼容承诺。
 
 ## 本机注意
 
