@@ -32,6 +32,9 @@ func Fields(outcome server.Outcome) []any {
 		if outcome.Usage.CachedTokens > 0 {
 			fields = append(fields, "cache_read_tokens", outcome.Usage.CachedTokens)
 		}
+		if outcome.Usage.CacheWriteTokens > 0 {
+			fields = append(fields, "cache_write_tokens", outcome.Usage.CacheWriteTokens)
+		}
 		if rate, ok := CacheHitRate(*outcome.Usage); ok {
 			fields = append(fields, "cache_hit_rate", rate)
 		}

@@ -147,6 +147,22 @@ func TestFieldsCache(t *testing.T) {
 		t.Errorf("没有缓存读时不该有 cache_hit_rate: %v", got)
 	}
 
+	// 缓存写是新写入的部分，单独一列，不计入命中率。
+	outcome.Usage = &server.Usage{PromptTokens: 1000, TotalTokens: 1000, CachedTokens: 640, CacheWriteTokens: 128}
+	fields = Fields(outcome)
+	if got := fieldValue(fields, "cache_write_tokens"); got != 128 {
+		t.Errorf("cache_write_tokens 是 %v，期望 128", got)
+	}
+	if got := fieldValue(fields, "cache_hit_rate"); got != 0.64 {
+		t.Errorf("命中率的分母含缓存写，分子只算缓存读，实际 %v，期望 0.64", got)
+	}
+
+	// 上游不报缓存写时不写这一列。
+	outcome.Usage.CacheWriteTokens = 0
+	if got := fieldValue(Fields(outcome), "cache_write_tokens"); got != nil {
+		t.Errorf("没有缓存写时不该有 cache_write_tokens: %v", got)
+	}
+
 	// 命中率保留三位小数。
 	outcome.Usage = &server.Usage{PromptTokens: 3, TotalTokens: 3, CachedTokens: 1}
 	if got := fieldValue(Fields(outcome), "cache_hit_rate"); got != 0.333 {

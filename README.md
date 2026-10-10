@@ -82,17 +82,14 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 | --- | --- |
 | `prompt_tokens`、`completion_tokens`、`total_tokens` | 上游给出的用量。提示词总数含缓存读与缓存写 |
 | `cache_read_tokens` | 命中提示缓存的提示词数 |
+| `cache_write_tokens` | 写进提示缓存的提示词数，Claude 与 OpenAI 两种上报写法已归一 |
 | `cache_hit_rate` | 缓存读除以提示词总数，保留三位小数，取值在 0 到 1 之间 |
 | `ttft` | 首字节延迟，只对流式请求写。非流式响应一次写完，这个数约等于总时长 |
 | `tps` | 生成速率，分母是生成时长（总时长减 `ttft`），保留一位小数。预填充与排队不算进去，因此长提示词上不会偏低；非流式请求不写 |
 
-分子只算缓存读：缓存写是新写入的部分，不算命中。上游不报缓存用量时缓存读也是零，
-与「报了但没命中」分不开，因此这两个字段宁可不写，也不写一个可能读错意思的 0。
-
-缓存读与命中率目前看不到：core 取的是 `prompt_cache_hit_tokens`，而跨方言转换之后这个
-字段是空的（缓存读落在 `prompt_tokens_details.cached_tokens` 或
-`input_tokens_details.cached_tokens`），缓存写 core 也没有交出来。这两处修好之后本行会
-自动多出这些字段，cli 不需要再改。
+分子只算缓存读：缓存写是新写入的部分，不算命中，但它计入分母（提示词总数含两者）。
+上游不报缓存用量时这两个数也是零，与「报了但没命中」分不开，因此三个字段宁可不写，
+也不写一个可能读错意思的 0。
 
 `log.format: json` 时这些字段是结构化的，便于直接收集。用量与指标来自上游的响应，
 同方言透传不解析响应体，因此这类请求只有前两行。
@@ -564,7 +561,7 @@ make clean
 
 ```
 # go.mod，发布构建看到的就是这一行
-require github.com/tokenmp/core v0.1.0
+require github.com/tokenmp/core v0.5.0
 ```
 
 ```
@@ -582,7 +579,7 @@ go work init . && go work use ../core
 ```
 
 两种路径都实测过：带 `go.work` 时 `go list -m -f '{{.Dir}}' github.com/tokenmp/core`
-指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.1.0，`go mod tidy && go build`
+指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.5.0，`go mod tidy && go build`
 直接可用。发布构建因此不需要额外步骤，也不会因为本机存在同级目录而悄悄换掉依赖。
 
 升级 core 时改 `require` 里的版本号，并重跑测试。core 是纯库，`dialect`、`relay`、
