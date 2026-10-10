@@ -13,6 +13,7 @@ import (
 	"github.com/tokenmp/cli/internal/configmgr"
 	"github.com/tokenmp/cli/internal/logging"
 	"github.com/tokenmp/cli/internal/media"
+	"github.com/tokenmp/cli/internal/metrics"
 	"github.com/tokenmp/cli/internal/pluginmgr"
 )
 
@@ -39,9 +40,13 @@ func newRunCmd() *cobra.Command {
 
 配置里启用但插件目录里找不到的插件会让启动失败，与 core 的行为一致。
 
-每个请求记一行，状态码小于 400 记 INFO，其余记 WARN。默认级别是 info，因此服务在
-跑就能看见全部请求，包括 /healthz 与未知路径。一次请求的失败行与完成行共用一个
-request_id。
+每个请求记三行：请求进入、请求完成，以及一行账目与指标。状态码小于 400 记 INFO，
+其余记 WARN；默认级别是 info，因此服务在跑就能看见全部请求，包括 /healthz 与未知
+路径。一次请求的几条日志共用一个 request_id。
+
+账目与指标行里除了上游给出的 token 数，还记流式请求的首字节延迟 ttft 与生成速率
+tps。tps 的分母是生成时长（总时长减 ttft），预填充与排队不算进去；非流式响应一次
+写完，这两个数对它没有意义，因此不记。
 
 服务提供的端点：
  - /v1/chat/completions，OpenAI Chat
@@ -95,11 +100,16 @@ func runServer(cmd *cobra.Command, opts runOptions) error {
 		cfg.Listen = opts.listen
 	}
 
-	logger := logging.New(cfg.Log, cmd.ErrOrStderr())
+	logs := logging.New(cfg.Log, cmd.ErrOrStderr())
 	// 媒体解析是进程级设置，启动阶段注册一次。
 	media.Register()
 
-	service, err := server.FromConfig(cfg, logger)
+	service, err := server.FromConfigWith(cfg, logs.Core, server.WithRequestDone(func(outcome server.Outcome) {
+		// 账目与指标由这里写：core 只交原始量，口径定在 internal/metrics。
+		if fields := metrics.Fields(outcome); fields != nil {
+			logs.Own.Info(metrics.Message(), fields...)
+		}
+	}))
 	if err != nil {
 		return err
 	}
