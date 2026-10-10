@@ -1,14 +1,18 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
-	"github.com/tokenmp/core/config"
-
 	"github.com/tokenmp/cli/internal/configmgr"
+	"github.com/tokenmp/cli/internal/highlight"
 )
 
 // show 命令支持的输出格式。
@@ -21,13 +25,8 @@ const (
 // showFormats 是 --format 的取值，顺序即文档里的顺序。
 var showFormats = []string{formatUI, formatYAML, formatJSON}
 
-// pluginEntryRow 是配置里一条插件登记项，也是概览视图的一行。
-type pluginEntryRow struct {
-	Key     string         `json:"key"`
-	Enabled bool           `json:"enabled"`
-	Order   int            `json:"order"`
-	Config  map[string]any `json:"config,omitempty"`
-}
+// headerWidth 是拿不到终端宽度时表头用的列数。
+const headerWidth = 80
 
 func newConfigShowCmd(opts *configOptions) *cobra.Command {
 	var format string
@@ -37,9 +36,11 @@ func newConfigShowCmd(opts *configOptions) *cobra.Command {
 		Short: "打印生效配置",
 		Long: `打印生效配置。
 
-默认输出概览视图：服务、渠道、模型路由与插件清单分组排列，渠道表与 config channels
-同形。--format yaml 给出填过默认值的配置文本，可以重定向成一份新配置；--format json
-给出机器可读的形状。--json 等同于 --format json。
+默认输出高亮的配置文本：YAML 按语法上色，左边一列行号，顶上一条表头，样式与 bat
+接近。输出不是终端时与 --format yaml 完全一致，行号与表头不会混进重定向的文件。
+
+--format yaml 给不带装饰的配置文本，适合重定向成一份新配置；--format json 给机器
+可读的形状。--json 等同于 --format json。
 
 三种格式看到的都是生效配置，不是文件原文，因此没写在文件里的 listen、timeout、
 max_retries 也会出现。yaml 与 json 不打印空值字段：空字符串、空段落与空列表只表示
@@ -63,8 +64,7 @@ max_retries 也会出现。yaml 与 json 不打印空值字段：空字符串、
 
 			switch selected {
 			case formatUI:
-				renderConfigOverview(cmd, env)
-				return nil
+				return renderConfigSource(cmd, env)
 			case formatYAML:
 				return printConfigYAML(cmd, env)
 			case formatJSON:
@@ -85,7 +85,7 @@ max_retries 也会出现。yaml 与 json 不打印空值字段：空字符串、
 	return cmd
 }
 
-// printConfigYAML 打印生效配置的 YAML 文本。
+// printConfigYAML 打印生效配置的 YAML 文本，不带任何装饰。
 func printConfigYAML(cmd *cobra.Command, env *configmgr.Env) error {
 	encoded, err := env.PrunedYAML()
 	if err != nil {
@@ -97,91 +97,57 @@ func printConfigYAML(cmd *cobra.Command, env *configmgr.Env) error {
 	return nil
 }
 
-// renderConfigOverview 打印概览视图：分组标题加表格，配色与其他命令一致。
-func renderConfigOverview(cmd *cobra.Command, env *configmgr.Env) {
-	cfg := env.Config
+// renderConfigSource 按 bat 的样子打印配置：表头、行号栏、按语法上色的正文。
+//
+// 输出不是终端时退化成 --format yaml 的纯文本。
+func renderConfigSource(cmd *cobra.Command, env *configmgr.Env) error {
+	source, err := env.PrunedYAML()
+	if err != nil {
+		return err
+	}
 	writer := out(cmd)
-
-	fmt.Fprintf(writer, "%s %s\n\n", palette.program.Render("config"), palette.cell.Render(env.ConfigPath))
-
-	fmt.Fprintln(writer, palette.title.Render("服务"))
-	service := newTable().Headers("项", "值")
-	service.Row("listen", cfg.Listen)
-	service.Row("log.format", cfg.Log.Format)
-	service.Row("log.level", cfg.Log.Level)
-	fmt.Fprintln(writer, service.Render())
-
-	channels := channelRows(cfg)
-	fmt.Fprintf(writer, "\n%s\n", sectionTitle("渠道", fmt.Sprintf("%d 个", len(channels))))
-	if len(channels) > 0 {
-		renderer := newTable().Headers("渠道", "方言", "基址", "路径", "鉴权", "凭据", "超时", "重试")
-		var missing []string
-		for _, row := range channels {
-			if row.Credential == credentialMissing {
-				missing = append(missing, row.Name)
-			}
-			renderer.Row(row.Name, row.Dialect, row.BaseURL, dash(row.Path), row.Auth, credentialText(row.Credential), row.Timeout, fmt.Sprintf("%d", row.MaxRetries))
-		}
-		fmt.Fprintln(writer, renderer.Render())
-		if len(missing) > 0 {
-			fmt.Fprintf(writer, "%s%s\n", palette.warn.Render("凭据环境变量没有设置："), joinList(missing))
-		}
+	if !isTerminal(cmd) {
+		// 不是终端时与 --format yaml 输出完全一致：行号与表头是给眼睛看的，重定向时
+		// 只会碍事。
+		fmt.Fprintf(writer, "# %s\n", env.ConfigPath)
+		fmt.Fprint(writer, string(source))
+		return nil
 	}
 
-	rules := ruleRows(cfg)
-	fmt.Fprintf(writer, "\n%s\n", sectionTitle("模型路由", fmt.Sprintf("%d 条", len(rules))))
-	if len(rules) > 0 {
-		renderer := newTable().Headers("匹配", "渠道", "上游模型", "方言")
-		for _, rule := range rules {
-			renderer.Row(rule.Match, rule.Channel, upstreamText(rule.Upstream), rule.Dialect)
-		}
-		fmt.Fprintln(writer, renderer.Render())
+	var highlighted bytes.Buffer
+	if err := highlight.YAML(&highlighted, string(source)); err != nil {
+		return fmt.Errorf("高亮配置失败: %w", err)
 	}
+	lines := strings.Split(strings.TrimSuffix(highlighted.String(), "\n"), "\n")
 
-	plugins := pluginEntryRows(cfg)
-	fmt.Fprintf(writer, "\n%s %s\n", palette.label.Render("插件目录"), palette.cell.Render(cfg.Plugins.Dir))
-	enabled := len(cfg.EnabledPlugins())
-	fmt.Fprintf(writer, "%s\n", sectionTitle("插件清单", fmt.Sprintf("%d 条，%d 个启用", len(plugins), enabled)))
-	if len(plugins) > 0 {
-		renderer := newTable().Headers("插件", "状态", "顺序", "配置")
-		for _, row := range plugins {
-			renderer.Row(row.Key, entryStateText(row.Enabled), fmt.Sprintf("%d", row.Order), entryConfigText(row.Config))
-		}
-		fmt.Fprintln(writer, renderer.Render())
+	fmt.Fprintln(writer, headerLine(env.ConfigPath))
+	numbers := palette.label.Width(len(strconv.Itoa(len(lines))))
+	for index, line := range lines {
+		fmt.Fprintf(writer, "%s %s %s\n", numbers.Render(strconv.Itoa(index+1)), palette.label.Render("│"), line)
 	}
+	return nil
 }
 
-// sectionTitle 渲染一个小节标题：标题加灰色的计数。
-func sectionTitle(title, count string) string {
-	return palette.title.Render(title) + "  " + palette.label.Render(count)
+// headerLine 渲染表头：一条横线夹着配置文件路径。
+func headerLine(path string) string {
+	label := " " + path + " "
+	rule := terminalWidth() - lipgloss.Width(label) - len("───")
+	if rule < 3 {
+		rule = 3
+	}
+	return palette.label.Render("───" + label + strings.Repeat("─", rule))
 }
 
-// entryStateText 渲染插件登记项的启用状态。
-func entryStateText(enabled bool) string {
-	if enabled {
-		return palette.ok.Render("启用")
+// terminalWidth 返回终端列数，拿不到时给一个默认值。
+func terminalWidth() int {
+	if width, _, err := term.GetSize(os.Stdout.Fd()); err == nil && width > 0 {
+		return width
 	}
-	return palette.label.Render("停用")
+	return headerWidth
 }
 
-// entryConfigText 渲染插件登记项的 config 段，空配置显示占位符。
-func entryConfigText(entry map[string]any) string {
-	if len(entry) == 0 {
-		return "-"
-	}
-	return compactJSON(entry)
-}
-
-// pluginEntryRows 把配置里的插件登记项整理成待输出的形状。
-func pluginEntryRows(cfg *config.Config) []pluginEntryRow {
-	rows := make([]pluginEntryRow, 0, len(cfg.Plugins.List))
-	for _, entry := range cfg.Plugins.List {
-		rows = append(rows, pluginEntryRow{
-			Key:     entry.Key,
-			Enabled: entry.Enabled,
-			Order:   entry.Order,
-			Config:  entry.Config,
-		})
-	}
-	return rows
+// isTerminal 报告命令的输出是不是终端。
+func isTerminal(cmd *cobra.Command) bool {
+	file, ok := cmd.OutOrStdout().(term.File)
+	return ok && term.IsTerminal(file.Fd())
 }

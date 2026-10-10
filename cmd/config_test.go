@@ -76,13 +76,22 @@ func TestConfigInitThenValidate(t *testing.T) {
 func TestConfigShowOverview(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
+	// 测试里输出是缓冲区，不是终端，因此默认格式退化成纯文本。
 	out, err := run(t, "config", "show", "--config", path)
 	if err != nil {
 		t.Fatalf("config show: %v", err)
 	}
-	for _, want := range []string{"服务", "渠道", "模型路由", "插件目录", "插件清单", "127.0.0.1:9999", "2m0s", "example", "openai"} {
+
+	plain, err := run(t, "config", "show", "--config", path, "--format", "yaml")
+	if err != nil {
+		t.Fatalf("config show --format yaml: %v", err)
+	}
+	if out != plain {
+		t.Errorf("不是终端时默认格式应当与 --format yaml 一致\n默认:\n%s\nyaml:\n%s", out, plain)
+	}
+	for _, want := range []string{"127.0.0.1:9999", "example", "gpt-*"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("概览视图里没有 %q:\n%s", want, out)
+			t.Errorf("输出里没有 %q:\n%s", want, out)
 		}
 	}
 }

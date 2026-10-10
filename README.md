@@ -10,6 +10,7 @@ TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组
 | [charmbracelet/fang](https://github.com/charmbracelet/fang) | 帮助与错误渲染，提供 `--version` 与 `-v` |
 | [charmbracelet/lipgloss](https://charm.land/lipgloss) | 表格与字段的着色 |
 | [charmbracelet/colorprofile](https://github.com/charmbracelet/colorprofile) | 按终端能力降级颜色 |
+| [alecthomas/chroma](https://github.com/alecthomas/chroma) | 配置文本的语法高亮，bat 用的也是它 |
 | [tokenmp/core](https://github.com/tokenmp/core) | 插件宿主、配置模型与插件接口定义 |
 
 ## 命令
@@ -67,34 +68,40 @@ tokenmp config init --config /etc/tokenmp/config.yaml
 
 | 格式 | 输出 |
 | --- | --- |
-| `ui` | 服务、渠道、模型路由与插件清单分组排列，配色与其余命令一致 |
-| `yaml` | 填过默认值的配置文本，可以重定向成一份新配置 |
+| `ui` | 高亮的配置文本：YAML 按语法上色，左边一列行号，顶上一条表头 |
+| `yaml` | 不带装饰的配置文本，可以重定向成一份新配置 |
 | `json` | 机器可读的形状，`--json` 等同于此项 |
+
+高亮用 chroma，bat 用的也是它，主题按终端明暗在 monokai 与 monokailight 之间选。
+输出不是终端时 `ui` 与 `yaml` 完全一致，行号与表头不会混进重定向的文件。
 
 ```
 $ tokenmp config show
-config /etc/tokenmp/config.yaml
-
-服务
- 项          值
- listen      127.0.0.1:8787
- log.format  text
- log.level   info
-
-渠道  1 个
- 渠道        方言    基址                          路径               鉴权                         凭据    超时  重试
- openrouter  openai  https://openrouter.ai/api/v1  /chat/completions  bearer ← OPENROUTER_API_KEY  未设置  2m0s  0
-凭据环境变量没有设置：openrouter
-
-模型路由  2 条
- 匹配      渠道        上游模型        方言
- gpt-*     openrouter  同请求的模型名  openai（同渠道）
- claude-*  openrouter  同请求的模型名  openai（同渠道）
-
-插件目录 /etc/tokenmp/plugins
-插件清单  1 条，1 个启用
- 插件  状态  顺序  配置
- echo  启用  10    {"tag":"example"}
+─── /etc/tokenmp/config.yaml ─────────────────────────────────────────────
+ 1 │ listen: 127.0.0.1:8787
+ 2 │ log:
+ 3 │   format: text
+ 4 │   level: info
+ 5 │ channels:
+ 6 │   - name: openrouter
+ 7 │     dialect: openai
+ 8 │     base_url: https://openrouter.ai/api/v1
+ 9 │     auth:
+10 │       style: bearer
+11 │       key_env: OPENROUTER_API_KEY
+12 │     timeout: 2m0s
+13 │     max_retries: 0
+14 │ models:
+15 │   - match: gpt-*
+16 │     channel: openrouter
+17 │ plugins:
+18 │   dir: /etc/tokenmp/plugins
+19 │   list:
+20 │     - key: echo
+21 │       enabled: true
+22 │       order: 10
+23 │       config:
+24 │         tag: example
 ```
 
 `show` 与 `get` 看到的是填过默认值之后的生效配置，不是文件原文，因此没写在文件里的
