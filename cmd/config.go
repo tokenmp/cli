@@ -26,7 +26,7 @@ func newConfigCmd() *cobra.Command {
 
 show 与 get 看到的是填过默认值的生效配置，不是文件原文；
 set 会改写文件，注释与缩进保留，写回后重新加载校验，不合法就还原。
-show 默认给概览视图，文本与 JSON 两种格式用 --format 选。`,
+show 默认给高亮的配置文本，yaml 与 json 两种纯文本格式用 --format 选。`,
 		Example: `  # 看生效配置的概览
   tokenmp config show
 

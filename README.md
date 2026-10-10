@@ -1,8 +1,8 @@
 # tokenmp
 
-TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组命令。
+TokenMP 的命令行工具。目前提供版本查询、启动服务与本地插件管理三组能力。
 
-命令树、帮助页面与插件宿主都来自开源项目，没有自己写参数解析与插件运行时。
+命令树、帮助页面、插件宿主与转发服务都来自开源项目，没有自己写参数解析、插件运行时与 HTTP 服务。
 
 | 依赖 | 用途 |
 | --- | --- |
@@ -21,12 +21,57 @@ TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组
 | `tokenmp --help`、`tokenmp -h` | 完整帮助 | `tokenmp plugin --help` |
 | `tokenmp --version`、`tokenmp -v` | 单行版本，例如 `tokenmp version dev (8c6f342)` | `tokenmp -v` |
 | `tokenmp version` | 版本表，字段为 commit、built、go、platform | `tokenmp version` |
+| `tokenmp run` | 启动转发服务，见下 | `tokenmp run --config /etc/tokenmp/config.yaml` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
 | `tokenmp config <子命令>` | 查看与校验配置，见下 | `tokenmp config validate` |
 | `tokenmp` | 不带参数时打印帮助 | `tokenmp` |
 
 命令失败时以状态码 1 退出，错误信息由 fang 上色。中文错误文案不带句点，
 也不把首词大写，这两处与 fang 的默认处理器不同。
+
+## 运行服务
+
+`tokenmp run` 按配置装配渠道与插件，然后开始监听，直到收到中断信号。
+
+| 标志 | 作用 |
+| --- | --- |
+| `--config` | 配置文件路径，默认当前目录的 `config.yaml` |
+| `--listen` | 覆盖配置里的 `listen`，例如 `--listen 127.0.0.1:9000` |
+| `--dry-run` | 只做装配与预检，不监听 |
+
+```
+$ tokenmp run --config /etc/tokenmp/config.yaml
+TokenMP 转发服务
+配置:     /etc/tokenmp/config.yaml
+监听:     127.0.0.1:8787
+日志:     text / info
+渠道:     1 个
+模型规则: 1 条
+插件:     0 个启用
+插件目录: /etc/tokenmp/plugins（不存在）
+端点:     /v1/chat/completions、/v1/responses、/v1/messages、/v1beta/models/{模型名}:{动作}、/healthz、/v1/models
+
+按 Ctrl-C 停止：先停止接收新连接，再给在途请求最多 10 秒结束。
+```
+
+监听地址先建好监听器再打印，因此写 `--listen 127.0.0.1:0` 时报出的是真实端口。
+服务日志按配置里的 `log` 段构造，写标准错误，与上面这份给人看的启动信息分开。
+
+启动前会拦下三类问题：配置不合法，凭据环境变量没有设置的渠道，以及配置里启用
+但插件目录里找不到的插件。三种都直接退出，不会带着问题开始监听。
+
+服务提供的端点：
+
+| 端点 | 方言 |
+| --- | --- |
+| `/v1/chat/completions` | OpenAI Chat |
+| `/v1/responses` | OpenAI Responses |
+| `/v1/messages` | Claude Messages |
+| `/v1beta/models/{模型名}:{动作}` | Gemini，动作是 `generateContent` 或 `streamGenerateContent` |
+| `/healthz`、`/v1/models` | 存活探测与模型列表 |
+
+跨协议转换遇到 data URL 形式的图片时能自己解析，带 `;base64` 与百分号编码两种写法
+都认。按 URL 取回图片内容的能力还没有实现，这类请求会明确报错，不会静默丢掉图片。
 
 ## 配置
 
@@ -236,6 +281,8 @@ make clean
 | [internal/configmgr](internal/configmgr/configmgr.go) | 配置的加载、路径取值与标量改写 |
 | [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写与校验回滚 |
 | [internal/highlight](internal/highlight/highlight.go) | 配置文本的语法高亮，主题按终端明暗选 |
+| [internal/logging](internal/logging/logging.go) | 按配置里的 log 段构造服务日志 |
+| [internal/media](internal/media/media.go) | 媒体解析回调，目前只解析 data URL |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
 帮助里只出现 `help`、`version`、`plugin` 与 `config`。cobra 自带的 `completion` 与 fang
