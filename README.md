@@ -1,6 +1,6 @@
 # tokenmp
 
-TokenMP 的命令行工具。目前提供版本查询、启动服务与本地插件管理三组能力。
+TokenMP 的命令行工具。目前提供版本查询、启动与测试转发服务、配置查看与本地插件管理几组能力。
 
 命令树、帮助页面、插件宿主与转发服务都来自开源项目，没有自己写参数解析、插件运行时与 HTTP 服务。
 
@@ -22,6 +22,7 @@ TokenMP 的命令行工具。目前提供版本查询、启动服务与本地插
 | `tokenmp --version`、`tokenmp -v` | 单行版本，例如 `tokenmp version dev (8c6f342)` | `tokenmp -v` |
 | `tokenmp version` | 版本表，字段为 commit、built、go、platform | `tokenmp version` |
 | `tokenmp run` | 启动转发服务，见下 | `tokenmp run --config /etc/tokenmp/config.yaml` |
+| `tokenmp test` | 进程内起服务发一条测试请求，见下 | `tokenmp test --model deepseek-chat --dialect claude` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
 | `tokenmp config <子命令>` | 查看与校验配置，见下 | `tokenmp config validate` |
 | `tokenmp completion <子命令>` | 生成并安装 shell 补全，见下 | `tokenmp completion install zsh` |
@@ -108,6 +109,59 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 
 跨协议转换遇到 data URL 形式的图片时能自己解析，带 `;base64` 与百分号编码两种写法
 都认。按 URL 取回图片内容的能力还没有实现，这类请求会明确报错，不会静默丢掉图片。
+
+## 测试服务
+
+`tokenmp test` 回答「这条渠道现在能不能用」。`config validate` 只查语法，
+`config channels` 只报凭据有没有设，都不发请求；`test` 在进程内按配置装配同一套服务，
+监听 `127.0.0.1` 的随机端口，按选定的客户端方言发一条最小请求，拿到结果后关掉。
+选路、跨方言转换、重试与插件都会走一遍，比直接打渠道更接近真实使用。
+
+| 标志 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--config` | `config.yaml` | 配置文件路径 |
+| `--model` | 第一条路由规则的 `match` | 要测试的模型名 |
+| `--prompt` | `你好` | 发给上游的提示词 |
+| `--dialect` | `openai` | 客户端方言：`openai`、`responses`、`claude`、`gemini` |
+| `--stream` | 关 | 按流式发送请求 |
+| `--timeout` | `30s` | 整条测试请求的超时时间 |
+| `--raw` | 关 | 打印完整的响应体 |
+| `--json` | 关 | 以 JSON 输出结构化结果 |
+| `--verbose` | 关 | 按配置里的级别打印 core 的服务日志 |
+
+先打印配置与候选路由，再打印请求结果。候选路由取自 `config.Resolve`，与
+`config models --model` 试算的是同一份结果，因此列表里的上游模型是 `${model}` 替换
+之后的。结果里的渠道、尝试次数与上游模型取自 core 的 `OnRequestDone`，TTFT 与 TPS 的
+口径复用 [internal/metrics](internal/metrics/metrics.go)。
+
+```
+$ tokenmp test --model deepseek-chat --prompt 你好 --dialect claude
+配置:   /tmp/tokenmp/config.yaml
+客户端: claude（POST /v1/messages）
+模型:   deepseek-chat
+
+候选路由
+ 顺序  渠道         上游模型                方言    亲和
+ 1     commandcode  deepseek/deepseek-chat  openai  accounts
+ 2     backup       deepseek-chat           openai  -
+
+请求结果
+渠道:     commandcode（第 1 条候选，尝试 1 次）
+上游模型: deepseek/deepseek-chat
+状态:     200
+耗时:     1ms
+用量:     prompt=12 completion=34 total=46
+回答:     你好！有什么可以帮你的？
+```
+
+`--raw` 在结果下面多打印一段完整的响应体。`--json` 给结构化结果，形状里有 `routes` 与
+`result` 两段，`result.channel` 与 `result.upstream` 是实际命中的渠道与上游模型，
+便于脚本断言。
+
+默认把 core 的服务日志压到 `warn`，只显示结果；`--verbose` 时按配置里的级别放开。
+上游返回非 2xx、超时、装配失败或模型没有匹配规则时以状态码 1 退出，并打印上游错误体。
+
+`test` 只发一条最小请求，不做并发压测，也不能用 `--channel` 直接打某条渠道。
 
 ## 配置
 
@@ -356,6 +410,8 @@ make clean
 | [main.go](main.go) | 入口，调用 `cmd.Execute` 并按返回值设置退出码 |
 | [cmd/root.go](cmd/root.go) | 根命令，以及 fang 的接线 |
 | [cmd/version.go](cmd/version.go) | `version` 子命令 |
+| [cmd/run.go](cmd/run.go) | `run` 子命令与服务装配 |
+| [cmd/test.go](cmd/test.go) | `test` 子命令：进程内起服务发一条测试请求 |
 | [cmd/plugin.go](cmd/plugin.go) | `plugin` 命令组与共用标志 |
 | [cmd/plugin_list.go](cmd/plugin_list.go) | 列出插件与状态 |
 | [cmd/plugin_show.go](cmd/plugin_show.go) | 单个插件的详情 |
@@ -385,10 +441,10 @@ make clean
 | [internal/metrics](internal/metrics/metrics.go) | 账目与指标行的口径：TTFT、TPS |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
-帮助里出现 `help`、`version`、`run`、`plugin`、`config` 与 `completion`。fang 自带的
-隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉 `fang.WithoutManpage()`
-一行即可恢复。cobra 的 `completion` 在 [cmd/completion.go](cmd/completion.go) 里补了
-中文说明，并挂上 `install` 子命令。
+帮助里出现 `help`、`version`、`run`、`test`、`plugin`、`config` 与 `completion`。fang
+自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
+`fang.WithoutManpage()` 一行即可恢复。cobra 的 `completion` 在
+[cmd/completion.go](cmd/completion.go) 里补了中文说明，并挂上 `install` 子命令。
 
 ## 依赖 core 的接线
 
