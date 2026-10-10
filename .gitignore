@@ -1,0 +1,12 @@
+# Build output
+/bin/
+/tokenmp
+
+# Test and coverage artifacts
+*.out
+*.test
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
