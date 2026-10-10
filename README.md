@@ -57,6 +57,18 @@ TokenMP 转发服务
 监听地址先建好监听器再打印，因此写 `--listen 127.0.0.1:0` 时报出的是真实端口。
 服务日志按配置里的 `log` 段构造，写标准错误，与上面这份给人看的启动信息分开。
 
+每个请求都记一行，状态码小于 400 记 INFO，其余记 WARN。默认级别是 `info`，因此服务
+在跑就能看见全部请求，包括 `/healthz`、`/v1/models` 与未知路径：
+
+```
+level=INFO msg=请求完成 request_id=1 method=POST path=/v1/chat/completions status=200
+  duration=1.775733ms model=deepseek-chat channel=a attempts=1 client=127.0.0.1
+```
+
+`attempts` 是这次请求试过的候选路由条数。一次请求产生的失败行与完成行共用一个
+`request_id`，报错时用它在日志里筛出整条链路。`log.format: json` 时这些字段是结构化
+的，便于直接收集。
+
 启动前会拦下三类问题：配置不合法，凭据环境变量没有设置的渠道，以及配置里启用
 但插件目录里找不到的插件。三种都直接退出，不会带着问题开始监听。
 
@@ -81,7 +93,7 @@ TokenMP 转发服务
 | 子命令 | 作用 | 示例 |
 | --- | --- | --- |
 | `config path` | 配置文件路径、状态与插件目录 | `tokenmp config path --json` |
-| `config show` | 打印生效配置，默认是概览视图 | `tokenmp config show --format yaml` |
+| `config show` | 打印生效配置，默认是高亮文本 | `tokenmp config show --format yaml` |
 | `config validate` | 校验并列出全部问题，不通过时退出码 1 | `tokenmp config validate` |
 | `config get <路径>` | 按点分路径取一个字段 | `tokenmp config get channels.0.base_url` |
 | `config set <路径> <值>` | 改一个标量字段 | `tokenmp config set log.level debug` |
@@ -108,6 +120,31 @@ tokenmp config channels
 tokenmp config models --model claude-sonnet-4
 tokenmp config init --config /etc/tokenmp/config.yaml
 ```
+
+模型规则写在 `models` 段，一条规则把一类模型名绑到一个渠道：
+
+| 字段 | 含义 |
+| --- | --- |
+| `match` | 模型名匹配式，支持 `*`（任意长度，含 `/` 与 `:`）与 `?`（一个字符） |
+| `channel` | 命中的请求发往哪个渠道 |
+| `upstream` | 发往上游的模型名。留空就用请求里的名字；写 `${model}` 会替换成请求里的名字 |
+| `dialect` | 覆盖渠道方言，用于同一个基址上的多种协议 |
+| `affinity` | 渠道亲和的组名。同组候选在运行时可互换，同一段会话粘在一条上；留空表示不参与 |
+
+```
+$ tokenmp config models --model deepseek-chat
+路由规则
+ 匹配        渠道       上游模型           方言              亲和
+ deepseek-*  account-a  deepseek/${model}  openai（同渠道）  accounts
+ deepseek-*  account-b  同请求的模型名     openai（同渠道）  accounts
+
+模型 deepseek-chat 的候选路由
+ 顺序  渠道       上游模型                方言    亲和
+ 1     account-a  deepseek/deepseek-chat  openai  accounts
+ 2     account-b  deepseek-chat           openai  accounts
+```
+
+试算里的上游模型名是替换之后的结果，规则表里给的是配置里的原样写法。
 
 `config show` 支持三种格式，用 `--format` 选，默认是 `ui`：
 

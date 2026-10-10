@@ -16,6 +16,7 @@ type modelRow struct {
 	Channel  string `json:"channel"`
 	Upstream string `json:"upstream"`
 	Dialect  string `json:"dialect"`
+	Affinity string `json:"affinity,omitempty"`
 }
 
 // routeRow 是解析后的一条候选路由。
@@ -23,6 +24,7 @@ type routeRow struct {
 	Channel  string `json:"channel"`
 	Upstream string `json:"upstream"`
 	Dialect  string `json:"dialect"`
+	Affinity string `json:"affinity,omitempty"`
 }
 
 // modelsOutput 是 models 命令 --json 的输出形状。
@@ -40,11 +42,14 @@ func newConfigModelsCmd(opts *configOptions) *cobra.Command {
 		Short: "列出模型路由规则，或试算一个模型的选路",
 		Long: `列出模型路由规则，或试算一个模型的选路。
 
-不带 --model 时只列出规则：match 支持 * 通配，同一个模型可以有多条规则，按配置顺序依次尝试。
-upstream 为空表示用请求里的模型名，dialect 为空表示用渠道的方言。
+不带 --model 时只列出规则：
+ - match 支持 * 与 ? 通配，同一个模型可以有多条规则，按配置顺序依次尝试
+ - upstream 为空表示用请求里的模型名；写了 ${model} 就替换成请求里的模型名
+ - dialect 为空表示用渠道的方言
+ - affinity 是渠道亲和的组名，同组候选在运行时可互换，留空表示不参与
 
-带 --model 时按规则试算，列出这个模型名会按什么顺序落到哪些渠道上。
-没有匹配的规则时列表为空。`,
+带 --model 时按规则试算，列出这个模型名会按什么顺序落到哪些渠道上，
+upstream 里的占位符按这个模型名替换后给出。没有匹配的规则时列表为空。`,
 		Example: `  tokenmp config models
   tokenmp config models --model gpt-4o
   tokenmp config models --model claude-sonnet-4 --json`,
@@ -72,9 +77,9 @@ upstream 为空表示用请求里的模型名，dialect 为空表示用渠道的
 			}
 
 			fmt.Fprintln(writer, palette.title.Render("路由规则"))
-			rules := newTable().Headers("匹配", "渠道", "上游模型", "方言")
+			rules := newTable().Headers("匹配", "渠道", "上游模型", "方言", "亲和")
 			for _, rule := range output.Rules {
-				rules.Row(rule.Match, rule.Channel, upstreamText(rule.Upstream), rule.Dialect)
+				rules.Row(rule.Match, rule.Channel, upstreamText(rule.Upstream), rule.Dialect, dash(rule.Affinity))
 			}
 			fmt.Fprintln(writer, rules.Render())
 
@@ -87,9 +92,9 @@ upstream 为空表示用请求里的模型名，dialect 为空表示用渠道的
 				fmt.Fprintf(writer, "%s\n", palette.warn.Render("没有匹配的规则"))
 				return nil
 			}
-			routes := newTable().Headers("顺序", "渠道", "上游模型", "方言")
+			routes := newTable().Headers("顺序", "渠道", "上游模型", "方言", "亲和")
 			for index, route := range output.Routes {
-				routes.Row(fmt.Sprintf("%d", index+1), route.Channel, route.Upstream, route.Dialect)
+				routes.Row(fmt.Sprintf("%d", index+1), route.Channel, route.Upstream, route.Dialect, dash(route.Affinity))
 			}
 			fmt.Fprintln(writer, routes.Render())
 			return nil
@@ -109,6 +114,7 @@ func ruleRows(cfg *config.Config) []modelRow {
 			Channel:  rule.Channel,
 			Upstream: rule.Upstream,
 			Dialect:  ruleDialect(cfg, rule),
+			Affinity: rule.Affinity,
 		})
 	}
 	return rows
@@ -134,6 +140,7 @@ func routeRows(cfg *config.Config, model string) []routeRow {
 			Channel:  route.Channel,
 			Upstream: route.Upstream,
 			Dialect:  string(route.Dialect),
+			Affinity: route.Affinity,
 		})
 	}
 	return rows

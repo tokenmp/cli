@@ -383,6 +383,77 @@ func TestConfigModelsJSON(t *testing.T) {
 	}
 }
 
+// affinityConfig 带上 ${model} 占位符与亲和组。
+const affinityConfig = `listen: 127.0.0.1:9999
+
+channels:
+  - name: account-a
+    dialect: openai
+    base_url: https://api.example.com/v1
+    path: /chat/completions
+    auth:
+      style: none
+
+  - name: account-b
+    dialect: openai
+    base_url: https://api.example.com/v1
+    path: /chat/completions
+    auth:
+      style: none
+
+models:
+  - match: "deepseek-*"
+    channel: account-a
+    upstream: "deepseek/${model}"
+    affinity: accounts
+
+  - match: "deepseek-*"
+    channel: account-b
+    affinity: accounts
+`
+
+func TestConfigModelsPlaceholderAndAffinity(t *testing.T) {
+	path := configSandbox(t, affinityConfig)
+
+	rules, err := run(t, "config", "models", "--config", path)
+	if err != nil {
+		t.Fatalf("config models: %v\n%s", err, rules)
+	}
+	// 规则表给出配置里的原样写法，亲和组名也在表里。
+	for _, want := range []string{"deepseek/${model}", "同请求的模型名", "accounts"} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("规则表里没有 %q:\n%s", want, rules)
+		}
+	}
+
+	trial, err := run(t, "config", "models", "--config", path, "--model", "deepseek-chat")
+	if err != nil {
+		t.Fatalf("config models --model: %v\n%s", err, trial)
+	}
+	// 试算给出替换之后的名字：deepseek/${model} 配上 deepseek-chat。
+	if !strings.Contains(trial, "deepseek/deepseek-chat") {
+		t.Errorf("试算没有替换占位符:\n%s", trial)
+	}
+
+	out, err := run(t, "config", "models", "--config", path, "--model", "deepseek-chat", "--json")
+	if err != nil {
+		t.Fatalf("config models --json: %v\n%s", err, out)
+	}
+	var result modelsOutput
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("输出不是合法 JSON: %v\n%s", err, out)
+	}
+	if len(result.Routes) != 2 {
+		t.Fatalf("候选路由数量不对: %+v", result.Routes)
+	}
+	if result.Routes[0].Upstream != "deepseek/deepseek-chat" || result.Routes[0].Affinity != "accounts" {
+		t.Errorf("第一条候选路由不对: %+v", result.Routes[0])
+	}
+	if result.Routes[1].Upstream != "deepseek-chat" {
+		t.Errorf("第二条候选路由应当沿用请求里的模型名: %+v", result.Routes[1])
+	}
+}
+
 func TestConfigPath(t *testing.T) {
 	path := configSandbox(t, validConfig)
 

@@ -39,6 +39,10 @@ func newRunCmd() *cobra.Command {
 
 配置里启用但插件目录里找不到的插件会让启动失败，与 core 的行为一致。
 
+每个请求记一行，状态码小于 400 记 INFO，其余记 WARN。默认级别是 info，因此服务在
+跑就能看见全部请求，包括 /healthz 与未知路径。一次请求的失败行与完成行共用一个
+request_id。
+
 服务提供的端点：
  - /v1/chat/completions，OpenAI Chat
  - /v1/responses，OpenAI Responses
