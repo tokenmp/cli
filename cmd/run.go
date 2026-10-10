@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -125,7 +126,7 @@ func assemble(
 	// 媒体解析是进程级设置，启动阶段注册一次。
 	media.Register()
 
-	service, err := server.FromConfigWith(cfg, logs.Core, server.WithRequestDone(func(outcome server.Outcome) {
+	service, err := server.FromConfigWith(cfg, logs.Core, server.WithRequestDone(func(_ context.Context, outcome server.Outcome) {
 		onDone(logs, outcome)
 	}))
 	if err != nil {

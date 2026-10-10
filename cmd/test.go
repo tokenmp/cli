@@ -186,6 +186,7 @@ type testUsage struct {
 	Completion int      `json:"completion_tokens"`
 	Total      int      `json:"total_tokens"`
 	CacheRead  int      `json:"cache_read_tokens,omitempty"`
+	CacheWrite int      `json:"cache_write_tokens,omitempty"`
 	CacheRate  *float64 `json:"cache_hit_rate,omitempty"`
 }
 
@@ -427,6 +428,7 @@ func testUsageOf(usage server.Usage) *testUsage {
 		Completion: usage.CompletionTokens,
 		Total:      usage.TotalTokens,
 		CacheRead:  usage.CachedTokens,
+		CacheWrite: usage.CacheWriteTokens,
 	}
 	if rate, ok := metrics.CacheHitRate(usage); ok {
 		row.CacheRate = &rate
@@ -565,6 +567,9 @@ func usageText(usage testUsage) string {
 	}
 	if usage.CacheRead > 0 {
 		parts = append(parts, fmt.Sprintf("cache_read=%d", usage.CacheRead))
+	}
+	if usage.CacheWrite > 0 {
+		parts = append(parts, fmt.Sprintf("cache_write=%d", usage.CacheWrite))
 	}
 	if usage.CacheRate != nil {
 		parts = append(parts, "cache_hit_rate="+strconv.FormatFloat(*usage.CacheRate, 'f', 3, 64))
