@@ -57,23 +57,31 @@ TokenMP 转发服务
 监听地址先建好监听器再打印，因此写 `--listen 127.0.0.1:0` 时报出的是真实端口。
 服务日志按配置里的 `log` 段构造，写标准错误，与上面这份给人看的启动信息分开。
 
-每个请求都记一行，状态码小于 400 记 INFO，其余记 WARN。默认级别是 `info`，因此服务
-在跑就能看见全部请求，包括 `/healthz`、`/v1/models` 与未知路径：
+每个请求记三行，都写标准错误。默认级别是 `info`，因此服务在跑就能看见全部请求，
+包括 `/healthz`、`/v1/models` 与未知路径：
 
 ```
-level=INFO msg=请求完成 request_id=1 method=POST path=/v1/messages status=200
-  duration=2.34122ms model=deepseek-chat channel=a attempts=1 client=127.0.0.1
-level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a
-  prompt_tokens=5 completion_tokens=6 total_tokens=11
+level=INFO msg=请求进入 request_id=1 method=POST path=/v1/messages client=127.0.0.1 user_agent=curl/8.22.0
+level=INFO msg=请求完成 request_id=1 method=POST path=/v1/messages status=200 duration=2.005676486s model=deepseek-chat channel=a attempts=1
+level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_tokens=500 completion_tokens=6 total_tokens=506 ttft=803.587741ms tps=5
 ```
 
-`attempts` 是这次请求试过的候选路由条数。一次请求产生的失败行与完成行共用一个
-`request_id`，报错时用它在日志里筛出整条链路。`log.format: json` 时这些字段是结构化
-的，便于直接收集。
+前两行由 core 写：`请求进入` 在请求进来时写出，`请求完成` 在处理器返回后写出，状态码
+小于 400 记 INFO，其余记 WARN。`attempts` 是这次请求试过的候选路由条数。一次请求产生的
+失败行与完成行共用一个 `request_id`，报错时用它在日志里筛出整条链路。
 
-用量单独记一行，`msg=用量统计`，靠 `request_id` 与完成行对上，并带上 `model` 与
-`channel` 以便按模型、渠道汇总；完成行里不再出现这些 token 字段。用量来自上游的
-响应，同方言透传不解析响应体，因此这类请求只有完成行，没有账目行。
+第三行由本工具写：core 通过 `OnRequestDone` 交出原始量，口径定在
+[internal/metrics](internal/metrics/metrics.go)。
+
+| 字段 | 口径 |
+| --- | --- |
+| `prompt_tokens`、`completion_tokens`、`total_tokens` | 上游给出的用量 |
+| `cached_tokens` | 命中提示缓存的那部分，有命中时才写 |
+| `ttft` | 首字节延迟，只对流式请求写。非流式响应一次写完，这个数约等于总时长 |
+| `tps` | 生成速率，分母是生成时长（总时长减 `ttft`），保留一位小数。预填充与排队不算进去，因此长提示词上不会偏低；非流式请求不写 |
+
+`log.format: json` 时这些字段是结构化的，便于直接收集。用量与指标来自上游的响应，
+同方言透传不解析响应体，因此这类请求只有前两行。
 
 启动前会拦下三类问题：配置不合法，凭据环境变量没有设置的渠道，以及配置里启用
 但插件目录里找不到的插件。三种都直接退出，不会带着问题开始监听。
@@ -326,6 +334,7 @@ make clean
 | [internal/highlight](internal/highlight/highlight.go) | 配置文本的语法高亮，主题按终端明暗选 |
 | [internal/logging](internal/logging/logging.go) | 按配置里的 log 段构造服务日志 |
 | [internal/media](internal/media/media.go) | 媒体解析回调，目前只解析 data URL |
+| [internal/metrics](internal/metrics/metrics.go) | 账目与指标行的口径：TTFT、TPS |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
 帮助里只出现 `help`、`version`、`plugin` 与 `config`。cobra 自带的 `completion` 与 fang
