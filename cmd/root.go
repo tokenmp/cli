@@ -56,7 +56,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 
-	rootCmd.AddCommand(newVersionCmd(), newPluginCmd())
+	rootCmd.AddCommand(newVersionCmd(), newPluginCmd(), newConfigCmd())
 	localize(rootCmd)
 
 	return rootCmd

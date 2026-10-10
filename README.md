@@ -21,10 +21,64 @@ TokenMP 的命令行工具。目前提供版本查询与本地插件管理两组
 | `tokenmp --version`、`tokenmp -v` | 单行版本，例如 `tokenmp version dev (8c6f342)` | `tokenmp -v` |
 | `tokenmp version` | 版本表，字段为 commit、built、go、platform | `tokenmp version` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
+| `tokenmp config <子命令>` | 查看与校验配置，见下 | `tokenmp config validate` |
 | `tokenmp` | 不带参数时打印帮助 | `tokenmp` |
 
 命令失败时以状态码 1 退出，错误信息由 fang 上色。中文错误文案不带句点，
 也不把首词大写，这两处与 fang 的默认处理器不同。
+
+## 配置
+
+配置是单个 YAML 文件，解码时开启 `KnownFields`，拼错的字段在加载时报错。相对路径
+以配置文件所在目录为基准。
+
+| 子命令 | 作用 | 示例 |
+| --- | --- | --- |
+| `config path` | 配置文件路径、状态与插件目录 | `tokenmp config path --json` |
+| `config show` | 打印生效配置 | `tokenmp config show > /tmp/effective.yaml` |
+| `config validate` | 校验并列出全部问题，不通过时退出码 1 | `tokenmp config validate` |
+| `config get <路径>` | 按点分路径取一个字段 | `tokenmp config get channels.0.base_url` |
+| `config set <路径> <值>` | 改一个标量字段 | `tokenmp config set log.level debug` |
+| `config channels` | 列出渠道，凭据只显示环境变量名 | `tokenmp config channels` |
+| `config models` | 列出路由规则，或按模型名试算选路 | `tokenmp config models --model gpt-4o` |
+| `config init` | 生成配置骨架 | `tokenmp config init --config /etc/tokenmp/config.yaml` |
+
+两个标志对整组生效：
+
+| 标志 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--config` | `config.yaml` | 配置文件路径 |
+| `--json` | 关 | 机器可读输出，除 `config init` 外都支持 |
+
+```
+tokenmp config path
+tokenmp config show
+tokenmp config validate --json
+tokenmp config get listen
+tokenmp config get plugins.list
+tokenmp config set log.level debug
+tokenmp config set plugins.dir /srv/tokenmp/plugins
+tokenmp config channels
+tokenmp config models --model claude-sonnet-4
+tokenmp config init --config /etc/tokenmp/config.yaml
+```
+
+`show` 与 `get` 看到的是填过默认值之后的生效配置，不是文件原文，因此没写在文件里的
+`listen`、`timeout`、`max_retries` 也会出现。`show` 不打印空值字段：空字符串、空段落
+与空列表只表示没写，没有信息量。
+
+`get` 的路径与配置文件同形，数字段表示数组下标，可以取到 `channels.0.base_url` 这样的
+嵌套取值。取到的段落或列表按 JSON 输出。
+
+`set` 只改标量字段：路径必须已经存在，或者属于 `listen`、`log.format`、`log.level`、
+`plugins.dir` 这四个顶层标量。指向段落或列表的路径会被拒绝。改写保留注释与缩进，
+写回后重新加载校验，不合法就还原原文件，因此把 `log.level` 改成不认识的取值会失败，
+而不是留下一份坏配置。
+
+`channels` 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。缺凭据的渠道会
+在表下列出。
+
+渠道与模型规则的增删改还没有对应命令，这几处结构复杂，直接在配置文件里写更直接。
 
 ## 插件管理
 
@@ -126,13 +180,23 @@ make clean
 | [cmd/plugin_state.go](cmd/plugin_state.go) | 启用、停用与顺序 |
 | [cmd/plugin_hooks.go](cmd/plugin_hooks.go) | 钩子与限额说明 |
 | [cmd/plugin_new.go](cmd/plugin_new.go) | 生成插件骨架 |
+| [cmd/config.go](cmd/config.go) | `config` 命令组与共用标志 |
+| [cmd/config_path.go](cmd/config_path.go) | 配置文件路径与状态 |
+| [cmd/config_show.go](cmd/config_show.go) | 生效配置，填过默认值并去掉空值 |
+| [cmd/config_validate.go](cmd/config_validate.go) | 校验并列出全部问题 |
+| [cmd/config_get.go](cmd/config_get.go) | 按路径取值 |
+| [cmd/config_set.go](cmd/config_set.go) | 改写一个标量字段 |
+| [cmd/config_channels.go](cmd/config_channels.go) | 渠道表与凭据状态 |
+| [cmd/config_models.go](cmd/config_models.go) | 路由规则与选路试算 |
+| [cmd/config_init.go](cmd/config_init.go) | 生成配置骨架 |
 | [cmd/style.go](cmd/style.go) | 配色、表格与字段排版 |
 | [cmd/errors.go](cmd/errors.go) | 错误渲染，去掉了英文句点与首词大写 |
 | [internal/pluginmgr](internal/pluginmgr/env.go) | 配置、插件目录与宿主的装配 |
-| [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写 |
+| [internal/configmgr](internal/configmgr/configmgr.go) | 配置的加载、路径取值与标量改写 |
+| [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写与校验回滚 |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
-帮助里只出现 `help`、`version` 与 `plugin`。cobra 自带的 `completion` 与 fang
+帮助里只出现 `help`、`version`、`plugin` 与 `config`。cobra 自带的 `completion` 与 fang
 自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
 `fang.WithoutCompletions()`、`fang.WithoutManpage()` 两行即可恢复。
 

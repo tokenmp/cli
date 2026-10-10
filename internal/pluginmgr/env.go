@@ -16,6 +16,7 @@ import (
 	"github.com/tokenmp/core/plugin"
 
 	"github.com/tokenmp/cli/internal/configedit"
+	"github.com/tokenmp/cli/internal/configmgr"
 )
 
 // 配置 plugins.list 里可以改写的字段名。
@@ -26,12 +27,8 @@ const (
 
 // Env 是一次插件管理命令用到的上下文。
 type Env struct {
-	// ConfigPath 是配置文件路径。
-	ConfigPath string
-	// Config 是加载后的配置。配置文件不存在时是只剩默认值的空配置。
-	Config *config.Config
-	// HasConfig 报告配置文件是否存在。写命令需要它为真。
-	HasConfig bool
+	// 配置的加载与路径处理由 configmgr 负责，这里只补上插件目录与日志。
+	*configmgr.Env
 	// Dir 是解析后的插件目录，可能不存在。
 	Dir string
 	// Logger 接收插件通过 host.log 写出的日志。管理命令只关心结果，默认丢弃。
@@ -40,24 +37,16 @@ type Env struct {
 
 // Load 加载配置。配置文件不存在不算错误：只看插件目录的命令不必先有配置。
 func Load(configPath, dirOverride string) (*Env, error) {
-	env := &Env{
-		ConfigPath: configPath,
-		Logger:     slog.New(slog.DiscardHandler),
-	}
-
-	cfg, err := config.Load(configPath)
-	switch {
-	case err == nil:
-		env.Config, env.HasConfig = cfg, true
-	case errors.Is(err, fs.ErrNotExist):
-		cfg = &config.Config{}
-		cfg.Defaults()
-		env.Config = cfg
-	default:
+	base, err := configmgr.Open(configPath)
+	if err != nil {
 		return nil, err
 	}
 
-	env.Dir = env.Config.Plugins.Dir
+	env := &Env{
+		Env:    base,
+		Dir:    base.Config.Plugins.Dir,
+		Logger: slog.New(slog.DiscardHandler),
+	}
 	if dirOverride != "" {
 		env.Dir = dirOverride
 	}
@@ -317,18 +306,8 @@ func (e *Env) Edit(key, field string, value any) error {
 	if !e.HasConfig {
 		return fmt.Errorf("配置文件 %s 不存在，无法改写启用状态与顺序", e.ConfigPath)
 	}
-	original, err := os.ReadFile(e.ConfigPath)
-	if err != nil {
-		return fmt.Errorf("读取配置文件 %s 失败: %w", e.ConfigPath, err)
-	}
-	if err := configedit.SetPluginField(e.ConfigPath, key, field, value); err != nil {
+	return configedit.SetPluginField(e.ConfigPath, key, field, value, func() error {
+		_, err := config.Load(e.ConfigPath)
 		return err
-	}
-	if _, err := config.Load(e.ConfigPath); err != nil {
-		if restoreErr := configedit.Restore(e.ConfigPath, original); restoreErr != nil {
-			return fmt.Errorf("改写后配置不合法（%v），还原 %s 也失败: %w", err, e.ConfigPath, restoreErr)
-		}
-		return fmt.Errorf("改写后配置不合法，已还原 %s: %w", e.ConfigPath, err)
-	}
-	return nil
+	})
 }
