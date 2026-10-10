@@ -28,17 +28,26 @@ type Loggers struct {
 // format 与 level 的取值在 config.Validate 里已经卡过，这里只做映射，遇到意外值
 // 退回到 text 与 info，不额外报错。
 func New(log config.Log, w io.Writer) Loggers {
-	options := &slog.HandlerOptions{Level: level(log.Level)}
-	var handler slog.Handler
-	if log.Format == "json" {
-		handler = slog.NewJSONHandler(w, options)
-	} else {
-		handler = slog.NewTextHandler(w, options)
-	}
+	return NewWithCoreLevel(log, w, level(log.Level))
+}
+
+// NewWithCoreLevel 与 New 相同，但把 core 的日志单独设到 coreLevel。
+//
+// test 命令默认用它把 core 压到 warn，只留错误；--verbose 时改回 New，按配置里的
+// 级别放开。账目与指标入口 Own 始终按配置里的级别。
+func NewWithCoreLevel(log config.Log, w io.Writer, coreLevel slog.Level) Loggers {
 	return Loggers{
-		Core: slog.New(stripUsage(handler)),
-		Own:  slog.New(handler),
+		Core: slog.New(stripUsage(handler(log.Format, w, &slog.HandlerOptions{Level: coreLevel}))),
+		Own:  slog.New(handler(log.Format, w, &slog.HandlerOptions{Level: level(log.Level)})),
 	}
+}
+
+// handler 按格式造一个 slog 处理器。format 不认识时用 text。
+func handler(format string, w io.Writer, options *slog.HandlerOptions) slog.Handler {
+	if format == "json" {
+		return slog.NewJSONHandler(w, options)
+	}
+	return slog.NewTextHandler(w, options)
 }
 
 // level 把配置里的级别名映射成 slog 的级别。

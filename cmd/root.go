@@ -59,7 +59,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 
-	rootCmd.AddCommand(newVersionCmd(), newRunCmd(), newPluginCmd(), newConfigCmd())
+	rootCmd.AddCommand(newVersionCmd(), newRunCmd(), newTestCmd(), newPluginCmd(), newConfigCmd())
 
 	// completion 命令由 cobra 懒创建。先建出来，好挂上 install 子命令并换中文说明。
 	rootCmd.InitDefaultCompletionCmd()

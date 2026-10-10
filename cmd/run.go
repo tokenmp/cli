@@ -89,47 +89,84 @@ type runOptions struct {
 	dryRun bool
 }
 
-// runServer 装配并运行服务。
-func runServer(cmd *cobra.Command, opts runOptions) error {
-	env, err := configmgr.Load(opts.configPath)
+// assembly 是一次装配的结果：加载好的配置、构造好的日志与建好的服务。
+//
+// 做成结构体而不是一串返回值：run 与 test 需要的字段不一样，逐个列出来调用方
+// 只会把不关心的值写成下划线。
+type assembly struct {
+	// Env 是加载与校验过的配置上下文。
+	Env *configmgr.Env
+	// Config 是生效配置，已填默认值。
+	Config *config.Config
+	// Loggers 是构造好的日志入口。
+	Loggers logging.Loggers
+	// Service 是装配好的服务，已经挂上请求结束回调。
+	Service *server.Server
+}
+
+// assemble 按配置装配服务：加载并校验配置、按 log 段构造日志、注册媒体解析、
+// 构造服务并挂上请求结束回调。run 与 test 共用这一条流程。
+//
+// newLogs 按配置里的 log 段构造日志。两个命令对 core 日志的级别要求不同：run 用
+// 配置里的级别，test 默认压到 warn。onDone 在每次请求结束时调用，拿到本次装配的
+// 日志入口与 core 交出的原始量；run 用它写账目行，test 用它收集结果。
+func assemble(
+	configPath string,
+	stderr io.Writer,
+	newLogs func(config.Log, io.Writer) logging.Loggers,
+	onDone func(logging.Loggers, server.Outcome),
+) (*assembly, error) {
+	env, err := configmgr.Load(configPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cfg := env.Config
-	if opts.listen != "" {
-		cfg.Listen = opts.listen
-	}
-
-	logs := logging.New(cfg.Log, cmd.ErrOrStderr())
+	logs := newLogs(cfg.Log, stderr)
 	// 媒体解析是进程级设置，启动阶段注册一次。
 	media.Register()
 
 	service, err := server.FromConfigWith(cfg, logs.Core, server.WithRequestDone(func(outcome server.Outcome) {
-		// 账目与指标由这里写：core 只交原始量，口径定在 internal/metrics。
-		if fields := metrics.Fields(outcome); fields != nil {
-			logs.Own.Info(metrics.Message(), fields...)
-		}
+		onDone(logs, outcome)
 	}))
 	if err != nil {
+		return nil, err
+	}
+	return &assembly{Env: env, Config: cfg, Loggers: logs, Service: service}, nil
+}
+
+// logOutcome 把 core 交出的原始量按 internal/metrics 的口径写成账目行。
+func logOutcome(logs logging.Loggers, outcome server.Outcome) {
+	if fields := metrics.Fields(outcome); fields != nil {
+		logs.Own.Info(metrics.Message(), fields...)
+	}
+}
+
+// runServer 装配并运行服务。
+func runServer(cmd *cobra.Command, opts runOptions) error {
+	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), logging.New, logOutcome)
+	if err != nil {
 		return err
+	}
+	if opts.listen != "" {
+		assembled.Config.Listen = opts.listen
 	}
 
 	writer := out(cmd)
 	if opts.dryRun {
-		printRunSummary(writer, env, cfg, cfg.Listen)
+		printRunSummary(writer, assembled.Env, assembled.Config, assembled.Config.Listen)
 		fmt.Fprintf(writer, "\n%s\n", palette.label.Render("--dry-run 只做装配与预检，没有开始监听"))
 		return nil
 	}
 
 	// 先建监听器再打印，这样 127.0.0.1:0 这类写法报出来的是真实端口。
-	listener, err := service.Listen(cmd.Context())
+	listener, err := assembled.Service.Listen(cmd.Context())
 	if err != nil {
 		return err
 	}
-	printRunSummary(writer, env, cfg, listener.Addr().String())
+	printRunSummary(writer, assembled.Env, assembled.Config, listener.Addr().String())
 	fmt.Fprintf(writer, "\n%s\n", palette.label.Render(shutdownNote))
 
-	if err := service.Serve(cmd.Context(), listener); err != nil {
+	if err := assembled.Service.Serve(cmd.Context(), listener); err != nil {
 		return err
 	}
 	fmt.Fprintf(writer, "\n%s\n", palette.label.Render("服务已停止"))
