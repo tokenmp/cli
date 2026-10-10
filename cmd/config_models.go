@@ -40,11 +40,11 @@ func newConfigModelsCmd(opts *configOptions) *cobra.Command {
 		Short: "列出模型路由规则，或试算一个模型的选路",
 		Long: `列出模型路由规则，或试算一个模型的选路。
 
-不带 --model 时只列出规则：match 支持 * 通配，同一个模型可以有多条规则，按配置顺序
-依次尝试。upstream 为空表示用请求里的模型名，dialect 为空表示用渠道的方言。
+不带 --model 时只列出规则：match 支持 * 通配，同一个模型可以有多条规则，按配置顺序依次尝试。
+upstream 为空表示用请求里的模型名，dialect 为空表示用渠道的方言。
 
-带 --model 时按规则试算，列出这个模型名会按什么顺序落到哪些渠道上。没有匹配的规则时
-列表为空。`,
+带 --model 时按规则试算，列出这个模型名会按什么顺序落到哪些渠道上。
+没有匹配的规则时列表为空。`,
 		Example: `  tokenmp config models
   tokenmp config models --model gpt-4o
   tokenmp config models --model claude-sonnet-4 --json`,

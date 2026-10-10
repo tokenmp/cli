@@ -14,8 +14,8 @@ func newVersionCmd() *cobra.Command {
 		Short: "打印本次构建的版本",
 		Long: `打印本次构建的版本。
 
-列出的提交号、构建时间与 Go 版本都是打包时记录下来的值。没有注入版本元数据的构建
-会退回 Go 工具链嵌进二进制的信息，缺失的字段不打印。`,
+列出的提交号、构建时间与 Go 版本都是打包时记录下来的值。
+没有注入版本元数据的构建会退回 Go 工具链嵌进二进制的信息，缺失的字段不打印。`,
 		Example: `  tokenmp version
   tokenmp --version`,
 		Args: cobra.NoArgs,

@@ -23,9 +23,9 @@ func newPluginCmd() *cobra.Command {
 		Short: "管理本地插件",
 		Long: `管理本地插件。
 
-插件是单文件同步 ECMAScript 模块，放在配置 plugins.dir 指向的目录里。是否参与
-转发与执行顺序记在同一份配置的 plugins.list 段里。本组命令只读写配置与插件文件，
-不接触正在运行的服务，改动在服务重启或重载配置后生效。`,
+插件是单文件同步 ECMAScript 模块，放在配置 plugins.dir 指向的目录里。
+是否参与转发与执行顺序记在同一份配置的 plugins.list 段里。
+本组命令只读写配置与插件文件，不接触正在运行的服务，改动在服务重启或重载配置后生效。`,
 		Example: `  # 列出插件与状态，顺序即执行顺序
   tokenmp plugin list
 

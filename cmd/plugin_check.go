@@ -21,8 +21,12 @@ func newPluginCheckCmd(opts *pluginOptions) *cobra.Command {
 		Short: "检查插件的语法、自述信息与配置登记",
 		Long: `检查插件。
 
-检查三件事：源码能否编译并导出 meta 与可用的钩子，源码里是否用到了宿主不提供的
-能力（网络、require、动态代码），以及配置 plugins.list 段与插件目录是否一致。
+检查三件事：
+
+- 源码能否编译并导出 meta 与可用的钩子
+- 源码里是否用到了宿主不提供的能力：网络、require 与动态代码
+- 配置 plugins.list 段与插件目录是否一致
+
 给出 key 时只检查这些插件。
 
 有致命问题时以状态码 1 退出，提示不改变退出码。`,
@@ -40,7 +44,7 @@ func newPluginCheckCmd(opts *pluginOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			issues, err := collectIssues(env, args)
+			issues, inspected, err := collectIssues(env, args)
 			if err != nil {
 				return err
 			}
@@ -50,7 +54,7 @@ func newPluginCheckCmd(opts *pluginOptions) *cobra.Command {
 					return err
 				}
 			} else {
-				renderIssues(cmd, env, issues)
+				renderIssues(cmd, env, issues, inspected)
 			}
 
 			if countErrors(issues) > 0 {
@@ -61,11 +65,29 @@ func newPluginCheckCmd(opts *pluginOptions) *cobra.Command {
 	}
 }
 
-// collectIssues 汇总检查结论。目录里读不出的插件、配置与目录的不一致都算结论。
-func collectIssues(env *pluginmgr.Env, keys []string) ([]plugin.Issue, error) {
+// collectIssues 汇总检查结论，并给出实际检查了几个插件文件。
+//
+// 目录里读不出的插件、配置与目录的不一致都算结论。插件目录不存在时按 core 的判定
+// 处理：没启用任何插件就算没问题，启用了插件则是致命问题。
+func collectIssues(env *pluginmgr.Env, keys []string) ([]plugin.Issue, int, error) {
 	files, err := env.Files()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	if len(files) == 0 && !env.Exists() {
+		enabled := env.Config.EnabledPlugins()
+		if len(enabled) == 0 {
+			return nil, 0, nil
+		}
+		names := make([]string, 0, len(enabled))
+		for _, entry := range enabled {
+			names = append(names, entry.Key)
+		}
+		return []plugin.Issue{{
+			Path:     env.Dir,
+			Severity: plugin.SeverityError,
+			Message:  fmt.Sprintf("插件目录不存在，但配置里启用了 %s", joinList(names)),
+		}}, 0, nil
 	}
 
 	limits := plugin.DefaultLimits()
@@ -86,16 +108,16 @@ func collectIssues(env *pluginmgr.Env, keys []string) ([]plugin.Issue, error) {
 	for _, file := range selected {
 		found, err := plugin.LintFile(file.Path, limits)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		issues = append(issues, found...)
 	}
 
 	if len(keys) > 0 || !env.HasConfig {
 		// 指定了 key，或没有配置文件时，登记与目录的比对没有意义。
-		return issues, nil
+		return issues, len(selected), nil
 	}
-	return append(issues, registrationIssues(env, files)...), nil
+	return append(issues, registrationIssues(env, files)...), len(selected), nil
 }
 
 // registrationIssues 比对配置里的登记项与目录里的文件。
@@ -153,10 +175,14 @@ func countErrors(issues []plugin.Issue) int {
 }
 
 // renderIssues 打印检查结论与一行小结。
-func renderIssues(cmd *cobra.Command, env *pluginmgr.Env, issues []plugin.Issue) {
+func renderIssues(cmd *cobra.Command, env *pluginmgr.Env, issues []plugin.Issue, inspected int) {
 	writer := out(cmd)
 	if len(issues) == 0 {
-		fmt.Fprintf(writer, "%s 的插件全部通过检查\n", env.Dir)
+		if inspected == 0 {
+			fmt.Fprintf(writer, "插件目录 %s 里没有插件，无需检查\n", env.Dir)
+			return
+		}
+		fmt.Fprintf(writer, "%s 的 %d 个插件全部通过检查\n", env.Dir, inspected)
 		return
 	}
 

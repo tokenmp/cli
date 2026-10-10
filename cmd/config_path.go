@@ -23,8 +23,9 @@ func newConfigPathCmd(opts *configOptions) *cobra.Command {
 		Short: "打印配置文件的路径与状态",
 		Long: `打印配置文件的路径与状态。
 
-配置文件不存在时也照常输出，脚本可以直接从这里取路径。路径是绝对路径，插件目录等
-相对路径都以它所在目录为基准；配置文件不存在时列出的是默认值。`,
+配置文件不存在时也照常输出，脚本可以直接从这里取路径。
+路径是绝对路径，插件目录等相对路径都以它所在目录为基准；
+配置文件不存在时列出的是默认值。`,
 		Example: `  tokenmp config path
   tokenmp config path --config /etc/tokenmp/config.yaml
   tokenmp config path --json`,

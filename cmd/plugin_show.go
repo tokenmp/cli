@@ -30,8 +30,8 @@ func newPluginShowCmd(opts *pluginOptions) *cobra.Command {
 		Short:   "显示单个插件的自述信息与状态",
 		Long: `显示单个插件的自述信息与状态。
 
-自述信息来自插件导出的 meta，状态来自配置。宿主对插件生效的限额与源码大小一并
-列出，便于判断插件是否超标。`,
+自述信息来自插件导出的 meta，状态来自配置。
+宿主对插件生效的限额与源码大小一并列出，便于判断插件是否超标。`,
 		Example: `  # 自述信息、状态、限额与 config 段
   tokenmp plugin show echo
 

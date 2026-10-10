@@ -45,10 +45,11 @@ func newConfigInitCmd(opts *configOptions) *cobra.Command {
 		Short: "生成一份配置骨架",
 		Long: `生成一份配置骨架。
 
-生成的配置带一个渠道、一条模型规则与一个空的插件清单，本身就能通过校验。改掉渠道
-基址与凭据环境变量名之后即可起服务。
+生成的配置带一个渠道、一条模型规则与一个空的插件清单，本身就能通过校验。
+改掉渠道基址与凭据环境变量名之后即可起服务。
 
-配置文件已存在时报错，除非给出 --force。所在目录不存在时会创建。`,
+配置文件已存在时报错，除非给出 --force。
+所在目录不存在时会创建。`,
 		Example: `  tokenmp config init
   tokenmp config init --config /etc/tokenmp/config.yaml
   tokenmp config init --force`,

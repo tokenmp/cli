@@ -61,11 +61,11 @@ func newPluginNewCmd(opts *pluginOptions) *cobra.Command {
 		Short: "生成一个插件骨架",
 		Long: `生成一个插件骨架。
 
-在插件目录里创建 <key>/plugin.js，默认连一份可回放的 fixture 一起创建。骨架里的
-meta.key 与目录名一致，生成后可以直接 check 与 replay。
+在插件目录里创建 <key>/plugin.js，默认连一份可回放的 fixture 一起创建。
+骨架里的 meta.key 与目录名一致，生成后可以直接 check 与 replay。
 
-生成的插件不会自动登记到配置，需要时用 plugin enable 启用。目标文件已存在时
-报错，除非给出 --force。`,
+生成的插件不会自动登记到配置，需要时用 plugin enable 启用。
+目标文件已存在时报错，除非给出 --force。`,
 		Example: `  # 生成插件与 fixture 骨架
   tokenmp plugin new html-escape
 

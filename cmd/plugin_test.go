@@ -285,6 +285,45 @@ func TestPluginCheckOnlyGivenKey(t *testing.T) {
 	}
 }
 
+func TestPluginCheckMissingDirectory(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "nope")
+
+	// 没有启用任何插件时，目录不存在不算问题，与 core 的判定一致。
+	out, err := run(t, "plugin", "check", "--dir", missing)
+	if err != nil {
+		t.Fatalf("没启用插件时目录不存在不该报错: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "无需检查") {
+		t.Errorf("应当说明没有插件可检查:\n%s", out)
+	}
+
+	listed, err := run(t, "plugin", "list", "--dir", missing)
+	if err != nil {
+		t.Fatalf("plugin list: %v", err)
+	}
+	if !strings.Contains(listed, "不存在") {
+		t.Errorf("列表应当说明目录不存在:\n%s", listed)
+	}
+
+	// 启用了插件却找不到目录是致命问题：否则「插件没生效」只能靠读日志发现。
+	configPath := filepath.Join(root, "config.yaml")
+	writeFile(t, configPath, `listen: 127.0.0.1:8787
+plugins:
+  dir: nope
+  list:
+    - key: echo
+      enabled: true
+`)
+	out, err = run(t, "plugin", "check", "--config", configPath)
+	if err == nil {
+		t.Fatal("启用插件但目录不存在时 check 应当失败")
+	}
+	if !strings.Contains(out, "插件目录不存在") {
+		t.Errorf("应当指出目录不存在:\n%s", out)
+	}
+}
+
 func TestPluginReplay(t *testing.T) {
 	box := newSandbox(t, sandboxConfig)
 

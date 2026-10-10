@@ -14,8 +14,9 @@ func newConfigGetCmd(opts *configOptions) *cobra.Command {
 		Short: "取一个配置字段",
 		Long: `取一个配置字段。
 
-路径用点号分隔，与配置文件同形，数字段表示数组下标，例如 listen、log.level、
-channels.0.base_url、plugins.list.0.key。取到的段落或列表按 JSON 输出。
+路径用点号分隔，与配置文件同形，数字段表示数组下标。
+例如 listen、log.level、channels.0.base_url、plugins.list.0.key。
+取到的段落或列表按 JSON 输出。
 
 看到的是填过默认值之后的取值，没写在文件里的字段也能取到。`,
 		Example: `  tokenmp config get listen

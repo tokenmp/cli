@@ -26,9 +26,10 @@ func newPluginHooksCmd(opts *pluginOptions) *cobra.Command {
 		Short: "列出宿主提供的钩子与限额",
 		Long: `列出宿主提供的钩子与限额。
 
-钩子按请求生命周期的顺序排列。钩子必须是同步函数，返回 Promise 会被拒绝；返回
-null 或 undefined 表示不改写，宿主沿用前一个插件的输出。限额由宿主统一设置，
-插件不能自行放宽。`,
+钩子按请求生命周期的顺序排列。
+钩子必须是同步函数，返回 Promise 会被拒绝；
+返回 null 或 undefined 表示不改写，宿主沿用前一个插件的输出。
+限额由宿主统一设置，插件不能自行放宽。`,
 		Args: cobra.NoArgs,
 		Example: `  tokenmp plugin hooks
   tokenmp plugin hooks --json`,
