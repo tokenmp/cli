@@ -1,6 +1,6 @@
 # tokenmp
 
-TokenMP 的命令行工具。目前提供版本查询、启动与测试转发服务、配置查看与本地插件管理几组能力。
+TokenMP 的命令行工具。目前提供版本查询、启动与测试转发服务、配置查看、渠道与模型规则管理，以及本地插件管理几组能力。
 
 命令树、帮助页面、插件宿主与转发服务都来自开源项目，没有自己写参数解析、插件运行时与 HTTP 服务。
 
@@ -23,6 +23,8 @@ TokenMP 的命令行工具。目前提供版本查询、启动与测试转发服
 | `tokenmp version` | 版本表，字段为 commit、built、go、platform | `tokenmp version` |
 | `tokenmp run` | 启动转发服务，见下 | `tokenmp run --config /etc/tokenmp/config.yaml` |
 | `tokenmp test` | 进程内起服务发一条测试请求，见下 | `tokenmp test --model deepseek-chat --dialect claude` |
+| `tokenmp channels <子命令>` | 渠道的增删查，见下 | `tokenmp channels list` |
+| `tokenmp models <子命令>` | 模型路由规则的增删查，见下 | `tokenmp models list --model gpt-4o` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
 | `tokenmp config <子命令>` | 查看与校验配置，见下 | `tokenmp config validate` |
 | `tokenmp completion <子命令>` | 生成并安装 shell 补全，见下 | `tokenmp completion install zsh` |
@@ -113,7 +115,7 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 ## 测试服务
 
 `tokenmp test` 回答「这条渠道现在能不能用」。`config validate` 只查语法，
-`config channels` 只报凭据有没有设，都不发请求；`test` 在进程内按配置装配同一套服务，
+`channels list` 只报凭据有没有设，都不发请求；`test` 在进程内按配置装配同一套服务，
 监听 `127.0.0.1` 的随机端口，按选定的客户端方言发一条最小请求，拿到结果后关掉。
 选路、跨方言转换、重试与插件都会走一遍，比直接打渠道更接近真实使用。
 
@@ -130,7 +132,7 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 | `--verbose` | 关 | 按配置里的级别打印 core 的服务日志 |
 
 先打印配置与候选路由，再打印请求结果。候选路由取自 `config.Resolve`，与
-`config models --model` 试算的是同一份结果，因此列表里的上游模型是 `${model}` 替换
+`models list --model` 试算的是同一份结果，因此列表里的上游模型是 `${model}` 替换
 之后的。结果里的渠道、尝试次数与上游模型取自 core 的 `OnRequestDone`，TTFT 与 TPS 的
 口径复用 [internal/metrics](internal/metrics/metrics.go)。
 
@@ -175,8 +177,6 @@ $ tokenmp test --model deepseek-chat --prompt 你好 --dialect claude
 | `config validate` | 校验并列出全部问题，不通过时退出码 1 | `tokenmp config validate` |
 | `config get <路径>` | 按点分路径取一个字段 | `tokenmp config get channels.0.base_url` |
 | `config set <路径> <值>` | 改一个标量字段 | `tokenmp config set log.level debug` |
-| `config channels` | 列出渠道，凭据只显示环境变量名 | `tokenmp config channels` |
-| `config models` | 列出路由规则，或按模型名试算选路 | `tokenmp config models --model gpt-4o` |
 | `config init` | 生成配置骨架 | `tokenmp config init --config /etc/tokenmp/config.yaml` |
 
 两个标志对整组生效：
@@ -194,35 +194,8 @@ tokenmp config get listen
 tokenmp config get plugins.list
 tokenmp config set log.level debug
 tokenmp config set plugins.dir /srv/tokenmp/plugins
-tokenmp config channels
-tokenmp config models --model claude-sonnet-4
 tokenmp config init --config /etc/tokenmp/config.yaml
 ```
-
-模型规则写在 `models` 段，一条规则把一类模型名绑到一个渠道：
-
-| 字段 | 含义 |
-| --- | --- |
-| `match` | 模型名匹配式，支持 `*`（任意长度，含 `/` 与 `:`）与 `?`（一个字符） |
-| `channel` | 命中的请求发往哪个渠道 |
-| `upstream` | 发往上游的模型名。留空就用请求里的名字；写 `${model}` 会替换成请求里的名字 |
-| `dialect` | 覆盖渠道方言，用于同一个基址上的多种协议 |
-| `affinity` | 渠道亲和的组名。同组候选在运行时可互换，同一段会话粘在一条上；留空表示不参与 |
-
-```
-$ tokenmp config models --model deepseek-chat
-路由规则
- 匹配        渠道       上游模型           方言              亲和
- deepseek-*  account-a  deepseek/${model}  openai（同渠道）  accounts
- deepseek-*  account-b  同请求的模型名     openai（同渠道）  accounts
-
-模型 deepseek-chat 的候选路由
- 顺序  渠道       上游模型                方言    亲和
- 1     account-a  deepseek/deepseek-chat  openai  accounts
- 2     account-b  deepseek-chat           openai  accounts
-```
-
-试算里的上游模型名是替换之后的结果，规则表里给的是配置里的原样写法。
 
 `config show` 支持三种格式，用 `--format` 选，默认是 `ui`：
 
@@ -276,10 +249,65 @@ $ tokenmp config show
 写回后重新加载校验，不合法就还原原文件，因此把 `log.level` 改成不认识的取值会失败，
 而不是留下一份坏配置。
 
-`channels` 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。缺凭据的渠道会
-在表下列出。
+渠道与模型规则的增删查分别在下面两节。
 
-渠道与模型规则的增删改还没有对应命令，这几处结构复杂，直接在配置文件里写更直接。
+## 渠道
+
+`tokenmp channels` 管理配置 `channels` 段里的上游渠道。
+
+| 子命令 | 作用 | 示例 |
+| --- | --- | --- |
+| `channels list` | 列出渠道与凭据状态 | `tokenmp channels list --json` |
+| `channels create` | 追加一个渠道 | `tokenmp channels create --name openrouter --dialect openai --base-url https://openrouter.ai/api/v1 --path /chat/completions --key-env OPENROUTER_API_KEY` |
+| `channels delete`、`channels remove` | 删除一个渠道 | `tokenmp channels delete openrouter` |
+
+`create` 追加前按渠道规则校验，例如 `base_url` 带了路径却没给 `path`、鉴权方式与参数对不上，都在写文件之前拦下。`--auth-style` 不写时按 `--key-env` 推断：给了就是 `bearer`，没给就是 `none`。渠道名重复时报错，不覆盖。删除仍被 `models` 段引用的渠道会被拒绝，并列出引用它的规则。
+
+`list` 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。缺凭据的渠道会在表下列出。
+
+```
+$ tokenmp channels list
+ 渠道        方言    基址                          路径               鉴权                         凭据    超时  重试
+ example     openai  https://api.example.com/v1    /chat/completions  bearer ← EXAMPLE_API_KEY     未设置  2m0s  0
+ openrouter  openai  https://openrouter.ai/api/v1  /chat/completions  bearer ← OPENROUTER_API_KEY  未设置  2m0s  0
+
+凭据环境变量没有设置：example、openrouter
+```
+
+## 模型规则
+
+`tokenmp models` 管理配置 `models` 段里的路由规则。一条规则把一类模型名绑到一个渠道：
+
+| 字段 | 含义 |
+| --- | --- |
+| `match` | 模型名匹配式，支持 `*`（任意长度，含 `/` 与 `:`）与 `?`（一个字符） |
+| `channel` | 命中的请求发往哪个渠道 |
+| `upstream` | 发往上游的模型名。留空就用请求里的名字；写 `${model}` 会替换成请求里的名字 |
+| `dialect` | 覆盖渠道方言，用于同一个基址上的多种协议 |
+| `affinity` | 渠道亲和的组名。同组候选在运行时可互换，同一段会话粘在一条上；留空表示不参与 |
+
+| 子命令 | 作用 | 示例 |
+| --- | --- | --- |
+| `models list` | 列出规则，或按模型名试算选路 | `tokenmp models list --model gpt-4o` |
+| `models create` | 追加一条规则 | `tokenmp models create --match "deepseek-*" --channel commandcode --upstream "deepseek/${model}"` |
+| `models delete`、`models remove` | 按序号或匹配式删除一条规则 | `tokenmp models delete 0` |
+
+规则没有名字，`list` 表里的序号是规则在 `models` 段里的下标，与 `config get models.0` 的口径一致，`delete` 收这个序号。按内容删时给 `match` 的原样写法，规则有多条时用 `--channel` 指定其中一条；删除后打印删掉的那条的匹配式与渠道。`create` 引用了不存在的渠道时报错，同一条 `match` 与 `channel` 组合重复时报错，不覆盖。
+
+```
+$ tokenmp models list --model deepseek-chat
+路由规则
+ 序号  匹配        渠道        上游模型           方言              亲和
+ 0     deepseek-*  account-a   deepseek/${model}  openai（同渠道）  accounts
+ 1     deepseek-*  account-b   同请求的模型名     openai（同渠道）  accounts
+
+模型 deepseek-chat 的候选路由
+ 顺序  渠道        上游模型                方言    亲和
+ 1     account-a   deepseek/deepseek-chat  openai  accounts
+ 2     account-b   deepseek-chat           openai  accounts
+```
+
+试算里的上游模型名是替换之后的结果，规则表里给的是配置里的原样写法。
 
 ## 插件管理
 
@@ -426,8 +454,14 @@ make clean
 | [cmd/config_validate.go](cmd/config_validate.go) | 校验并列出全部问题 |
 | [cmd/config_get.go](cmd/config_get.go) | 按路径取值 |
 | [cmd/config_set.go](cmd/config_set.go) | 改写一个标量字段 |
-| [cmd/config_channels.go](cmd/config_channels.go) | 渠道表与凭据状态 |
-| [cmd/config_models.go](cmd/config_models.go) | 路由规则与选路试算 |
+| [cmd/channels.go](cmd/channels.go) | `channels` 命令组与渠道整理的共用逻辑 |
+| [cmd/channels_list.go](cmd/channels_list.go) | 渠道表与凭据状态 |
+| [cmd/channels_create.go](cmd/channels_create.go) | 追加渠道并校验 |
+| [cmd/channels_delete.go](cmd/channels_delete.go) | 删除渠道，拒绝删除被引用的渠道 |
+| [cmd/models.go](cmd/models.go) | `models` 命令组与规则整理的共用逻辑 |
+| [cmd/models_list.go](cmd/models_list.go) | 路由规则表与选路试算 |
+| [cmd/models_create.go](cmd/models_create.go) | 追加路由规则 |
+| [cmd/models_delete.go](cmd/models_delete.go) | 按序号或匹配式删除规则 |
 | [cmd/config_init.go](cmd/config_init.go) | 生成配置骨架 |
 | [cmd/completion.go](cmd/completion.go) | shell 补全：输出脚本与 install |
 | [cmd/style.go](cmd/style.go) | 配色、表格与字段排版 |
@@ -441,7 +475,8 @@ make clean
 | [internal/metrics](internal/metrics/metrics.go) | 账目与指标行的口径：TTFT、TPS |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
-帮助里出现 `help`、`version`、`run`、`test`、`plugin`、`config` 与 `completion`。fang
+帮助里出现 `help`、`version`、`run`、`test`、`channels`、`models`、`plugin`、`config`
+与 `completion`。fang
 自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
 `fang.WithoutManpage()` 一行即可恢复。cobra 的 `completion` 在
 [cmd/completion.go](cmd/completion.go) 里补了中文说明，并挂上 `install` 子命令。

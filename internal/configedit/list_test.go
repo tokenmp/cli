@@ -204,14 +204,53 @@ func TestAppendMappingCheckFailureRestores(t *testing.T) {
 func TestListPathMissing(t *testing.T) {
 	path := sandbox(t, "listen: 127.0.0.1:9999\n")
 
-	err := AppendMapping(path, []string{"channels"}, testChannel{Name: "extra"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "路径 channels 不存在") {
-		t.Errorf("路径不存在应当报错并点出路径: %v", err)
+	// 最后一段不存在时补出来：channels create 要能在没有 channels 段的配置上直接追加。
+	err := AppendMapping(path, []string{"channels"}, testChannel{Name: "extra", Dialect: "claude"}, nil)
+	if err != nil {
+		t.Fatalf("最后一段不存在时应当补出来: %v", err)
+	}
+	const want = "listen: 127.0.0.1:9999\nchannels:\n  - name: extra\n    dialect: claude\n"
+	if got := readBack(t, path); got != want {
+		t.Errorf("补出的序列形状不对\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 
+	// 中间段不存在仍然报错，不猜结构。
 	err = RemoveIndex(path, []string{"plugins", "list"}, 0, nil)
 	if err == nil || !strings.Contains(err.Error(), "路径 plugins 不存在") {
 		t.Errorf("中间段不存在应当报错并点出路径: %v", err)
+	}
+	err = AppendMapping(path, []string{"plugins", "list"}, testPlugin{Key: "echo"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "路径 plugins 不存在") {
+		t.Errorf("追加时中间段不存在也应当报错: %v", err)
+	}
+}
+
+func TestAppendMappingCreatesMissingSequenceInExistingMapping(t *testing.T) {
+	// plugins 段在、list 不在时补出 list。
+	const source = "listen: 127.0.0.1:9999\n\nplugins:\n  dir: plugins\n"
+	path := sandbox(t, source)
+
+	if err := AppendMapping(path, []string{"plugins", "list"}, testPlugin{Key: "echo", Enabled: true}, nil); err != nil {
+		t.Fatalf("AppendMapping: %v", err)
+	}
+	// 空行会被编码规范化，注释与两格缩进保留，见包文档。
+	const want = "listen: 127.0.0.1:9999\nplugins:\n  dir: plugins\n  list:\n    - key: echo\n      enabled: true\n"
+	if got := readBack(t, path); got != want {
+		t.Errorf("嵌套补齐的形状不对\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestAppendMappingKeepsExistingEntries(t *testing.T) {
+	// 已经有 channels 段时仍然追加到末尾，不重建序列。
+	const source = "channels:\n  # 已有的一条\n  - name: example\n    dialect: openai\n"
+	path := sandbox(t, source)
+
+	if err := AppendMapping(path, []string{"channels"}, testChannel{Name: "extra", Dialect: "claude"}, nil); err != nil {
+		t.Fatalf("AppendMapping: %v", err)
+	}
+	const want = "channels:\n  # 已有的一条\n  - name: example\n    dialect: openai\n  - name: extra\n    dialect: claude\n"
+	if got := readBack(t, path); got != want {
+		t.Errorf("追加结果不对\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 

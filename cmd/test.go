@@ -88,7 +88,7 @@ func newTestCmd() *cobra.Command {
 
 先打印配置与候选路由，再打印请求结果：
 
-- 候选路由取自 config.Resolve，与 config models --model 试算的是同一份结果，
+- 候选路由取自 config.Resolve，与 tokenmp models list --model 试算的是同一份结果，
   上游模型是 ${model} 替换之后的
 - 请求结果里的渠道、尝试次数与上游模型取自 core 的 OnRequestDone，TTFT 与 TPS
   的口径复用 internal/metrics
