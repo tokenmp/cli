@@ -51,23 +51,15 @@ upstream 里的占位符按这个模型名替换后给出。没有匹配的规�
 				return printJSON(cmd, output)
 			}
 
+			hasRules, err := printModelsRules(cmd, output)
+			if err != nil {
+				return err
+			}
+			if !hasRules || model == "" {
+				return nil
+			}
+
 			writer := out(cmd)
-			if len(output.Rules) == 0 {
-				fmt.Fprintln(writer, "配置里没有模型路由规则")
-				return nil
-			}
-
-			fmt.Fprintln(writer, palette.title.Render("路由规则"))
-			rules := newTable().Headers("序号", "匹配", "渠道", "上游模型", "方言", "亲和")
-			for _, rule := range output.Rules {
-				rules.Row(fmt.Sprintf("%d", rule.Index), rule.Match, rule.Channel, upstreamText(rule.Upstream), rule.Dialect, dash(rule.Affinity))
-			}
-			fmt.Fprintln(writer, rules.Render())
-
-			if model == "" {
-				return nil
-			}
-
 			fmt.Fprintf(writer, "\n%s\n", palette.title.Render("模型 "+model+" 的候选路由"))
 			if len(output.Routes) == 0 {
 				fmt.Fprintf(writer, "%s\n", palette.warn.Render("没有匹配的规则"))
@@ -85,4 +77,23 @@ upstream 里的占位符按这个模型名替换后给出。没有匹配的规�
 	cmd.Flags().StringVar(&model, "model", "", "按这个模型名试算候选路由")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "以 JSON 输出，便于脚本处理")
 	return cmd
+}
+
+// printModelsRules 打印路由规则表，models list 与交互模式的非终端退化共用。
+//
+// 第二个返回值报告是否有规则：没有规则时表头也不打印，调用方据此跳过后续的试算表。
+func printModelsRules(cmd *cobra.Command, output modelsOutput) (bool, error) {
+	writer := out(cmd)
+	if len(output.Rules) == 0 {
+		fmt.Fprintln(writer, "配置里没有模型路由规则")
+		return false, nil
+	}
+
+	fmt.Fprintln(writer, palette.title.Render("路由规则"))
+	rules := newTable().Headers("序号", "匹配", "渠道", "上游模型", "方言", "亲和")
+	for _, rule := range output.Rules {
+		rules.Row(fmt.Sprintf("%d", rule.Index), rule.Match, rule.Channel, upstreamText(rule.Upstream), rule.Dialect, dash(rule.Affinity))
+	}
+	fmt.Fprintln(writer, rules.Render())
+	return true, nil
 }

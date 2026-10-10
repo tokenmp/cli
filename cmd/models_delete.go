@@ -61,7 +61,7 @@ remove 是 delete 的别名，用法相同。`,
 				return printModelEntry(cmd, env.ConfigPath, fmt.Sprintf("将要删除的规则（models.%d）", index), modelEntryOf(rule))
 			}
 
-			if err := configedit.RemoveIndex(env.ConfigPath, []string{"models"}, index, reloadableCheck(env.ConfigPath)); err != nil {
+			if _, err := removeModelAt(env, index); err != nil {
 				return err
 			}
 
@@ -78,6 +78,20 @@ remove 是 delete 的别名，用法相同。`,
 	cmd.Flags().StringVar(&channelName, "channel", "", "按匹配式定位时限定渠道")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只打印将要删除的规则，不落盘")
 	return cmd
+}
+
+// removeModelAt 按下标删除模型规则，返回删掉的规则。
+//
+// models delete 与交互界面共用这一条路径。
+func removeModelAt(env *configmgr.Env, index int) (*config.Model, error) {
+	if index < 0 || index >= len(env.Config.Models) {
+		return nil, fmt.Errorf("规则下标 %d 越界，共 %d 条", index, len(env.Config.Models))
+	}
+	rule := env.Config.Models[index]
+	if err := configedit.RemoveIndex(env.ConfigPath, []string{"models"}, index, reloadableCheck(env.ConfigPath)); err != nil {
+		return nil, err
+	}
+	return &rule, nil
 }
 
 // resolveModelIndex 把序号或匹配式解析成规则下标。

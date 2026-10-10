@@ -49,16 +49,15 @@ remove 是 delete 的别名，用法相同。`,
 			}
 
 			index := channelIndex(env.Config, name)
-			if refs := referencingRules(env.Config, name); len(refs) > 0 {
-				return fmt.Errorf("渠道 %s 仍被 %d 条模型规则引用（%s），先删除这些规则或改用别的渠道",
-					name, len(refs), joinList(refs))
+			if err := checkChannelRemovable(env.Config, name); err != nil {
+				return err
 			}
 
 			if dryRun {
 				return printChannelEntry(cmd, env.ConfigPath, "将要删除的渠道", channelEntryOf(record))
 			}
 
-			if err := configedit.RemoveIndex(env.ConfigPath, []string{"channels"}, index, reloadableCheck(env.ConfigPath)); err != nil {
+			if _, err := removeChannelAt(env, index); err != nil {
 				return err
 			}
 
@@ -73,6 +72,33 @@ remove 是 delete 的别名，用法相同。`,
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只打印将要删除的渠道，不落盘")
 	return cmd
+}
+
+// checkChannelRemovable 报告渠道能否删除，仍被模型规则引用时报错并列出引用的规则。
+func checkChannelRemovable(cfg *config.Config, name string) error {
+	refs := referencingRules(cfg, name)
+	if len(refs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("渠道 %s 仍被 %d 条模型规则引用（%s），先删除这些规则或改用别的渠道",
+		name, len(refs), joinList(refs))
+}
+
+// removeChannelAt 检查引用后按下标删除渠道，返回删掉的渠道名。
+//
+// channels delete 与交互界面共用这一条路径，两边的判断不会分叉。
+func removeChannelAt(env *configmgr.Env, index int) (string, error) {
+	if index < 0 || index >= len(env.Config.Channels) {
+		return "", fmt.Errorf("渠道下标 %d 越界，共 %d 条", index, len(env.Config.Channels))
+	}
+	record := env.Config.Channels[index]
+	if err := checkChannelRemovable(env.Config, record.Name); err != nil {
+		return "", err
+	}
+	if err := configedit.RemoveIndex(env.ConfigPath, []string{"channels"}, index, reloadableCheck(env.ConfigPath)); err != nil {
+		return "", err
+	}
+	return record.Name, nil
 }
 
 // channelIndex 返回渠道在 channels 段里的下标，调用方已确认它存在。
