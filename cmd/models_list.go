@@ -40,6 +40,7 @@ upstream 里的占位符按这个模型名替换后给出。没有匹配的规�
   tokenmp models list --model claude-sonnet-4 --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// 规则表与序号按文件里的写法：序号与 config get models.N 的口径一致。
 			env, err := configmgr.Load(opts.configPath)
 			if err != nil {
 				return err
@@ -48,7 +49,9 @@ upstream 里的占位符按这个模型名替换后给出。没有匹配的规�
 			output := modelsOutput{Rules: ruleRows(env.Config)}
 			if model != "" {
 				output.Model = model
-				output.Routes = routeRows(env.Config, model)
+				// 试算按运行时形态：展开顶层账号之后的渠道与规则才是真正的候选。
+				// Expand 是导出的且幂等，这里直接用。
+				output.Routes = routeRows(env.Config.Expand(), model)
 			}
 
 			if jsonOut {

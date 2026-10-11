@@ -330,6 +330,13 @@ func buildImportPlan(cfg *config.Config, data []byte) (*importPlan, error) {
 			envNames[item.Auth.KeyEnv] = true
 		}
 	}
+	// 引用顶层账号的渠道在这一形态下 key_env 是空的，账号自己的 key_env 同样是已经
+	// 占用的环境变量名，导入时不能重复生成。
+	for _, account := range cfg.Accounts {
+		if account.KeyEnv != "" {
+			envNames[account.KeyEnv] = true
+		}
+	}
 	rules := make(map[string]bool, len(cfg.Models))
 	for _, item := range cfg.Models {
 		rules[item.Match+importRuleKeySeparator+item.Channel] = true

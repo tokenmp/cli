@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -32,7 +33,8 @@ func newChannelsCmd() *cobra.Command {
 渠道是上游服务的接入点，基址、方言、鉴权、超时与重试都记在同一份配置的 channels 段里。
 本组命令只读写配置，改动在服务重启后生效。
 
-list 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。
+list 只报告凭据所在的环境变量有没有设置，不读也不打印它的值；渠道引用顶层账号时
+按引用的账号判断。
 create 追加前按渠道规则校验，base_url 带了路径却没给 path 这类问题在这里就拦下。
 delete 拒绝删除仍被 models 段引用的渠道，并列出引用它的规则。
 
@@ -132,7 +134,7 @@ type authEntry struct {
 	Query  string `yaml:"query,omitempty"`
 }
 
-// channelEntryOf 把生效配置里的渠道还原成写回形状，可选字段为空时不带出来。
+// channelEntryOf 把配置里的渠道还原成写回形状，可选字段为空时不带出来。
 func channelEntryOf(record config.Channel) channelEntry {
 	entry := channelEntry{
 		Name:       record.Name,
@@ -157,7 +159,7 @@ func channelRows(cfg *config.Config) []channelRow {
 			BaseURL:    channel.BaseURL,
 			Path:       channel.Path,
 			Auth:       authLabel(channel.Auth),
-			Credential: credentialLabel(channel.Auth),
+			Credential: credentialLabel(cfg, channel.Auth),
 			Timeout:    channel.Timeout.String(),
 			MaxRetries: retriesOf(channel),
 			Headers:    len(channel.Headers),
@@ -174,24 +176,41 @@ const (
 	credentialNoEnvVar = "缺环境变量名"
 )
 
-// authLabel 描述鉴权方式。只出现环境变量名，不出现它的值。
+// authLabel 描述鉴权方式。只出现环境变量名或引用的账号名，不出现凭据的值。
 func authLabel(auth config.Auth) string {
+	credential := auth.KeyEnv
+	if len(auth.Accounts) > 0 {
+		credential = accountsText(auth.Accounts)
+	}
 	switch auth.Style {
 	case "bearer":
-		return "bearer ← " + auth.KeyEnv
+		return "bearer ← " + credential
 	case "x-api-key":
-		return "x-api-key ← " + auth.KeyEnv
+		return "x-api-key ← " + credential
 	case "query":
-		return fmt.Sprintf("query %s ← %s", auth.Query, auth.KeyEnv)
+		return fmt.Sprintf("query %s ← %s", auth.Query, credential)
 	case "custom":
-		return fmt.Sprintf("请求头 %s ← %s", auth.Header, auth.KeyEnv)
+		return fmt.Sprintf("请求头 %s ← %s", auth.Header, credential)
 	default:
 		return "无"
 	}
 }
 
+// accountsText 把引用的顶层账号名写成一行，给 authLabel 用。
+func accountsText(names []string) string {
+	return "accounts: " + strings.Join(names, ", ")
+}
+
 // credentialLabel 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。
-func credentialLabel(auth config.Auth) string {
+//
+// 引用顶层账号的渠道（auth.accounts 非空）按引用的账号判断，与运行时一致：
+//   - 账号本身不存在或它没有 key_env：缺环境变量名
+//   - 所有账号的 key_env 都已设置：已设置
+//   - 有账号的 key_env 没设置：未设置
+func credentialLabel(cfg *config.Config, auth config.Auth) string {
+	if len(auth.Accounts) > 0 {
+		return accountsCredentialLabel(cfg, auth.Accounts)
+	}
 	if auth.Style == "" || auth.Style == "none" {
 		return credentialNotNeed
 	}
@@ -202,6 +221,34 @@ func credentialLabel(auth config.Auth) string {
 		return credentialPresent
 	}
 	return credentialMissing
+}
+
+// accountsCredentialLabel 按引用的账号逐个看 key_env，全部设好才算已设置。
+func accountsCredentialLabel(cfg *config.Config, names []string) string {
+	missing := false
+	for _, name := range names {
+		account, ok := accountByName(cfg, name)
+		if !ok || account.KeyEnv == "" {
+			return credentialNoEnvVar
+		}
+		if _, set := os.LookupEnv(account.KeyEnv); !set {
+			missing = true
+		}
+	}
+	if missing {
+		return credentialMissing
+	}
+	return credentialPresent
+}
+
+// accountByName 按名字取顶层账号，找不到时返回假值。
+func accountByName(cfg *config.Config, name string) (config.Account, bool) {
+	for _, account := range cfg.Accounts {
+		if account.Name == name {
+			return account, true
+		}
+	}
+	return config.Account{}, false
 }
 
 // credentialText 给凭据状态上色。

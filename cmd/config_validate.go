@@ -40,6 +40,9 @@ func newConfigValidateCmd(opts *configOptions) *cobra.Command {
 
 配置文件不存在算不通过。
 
+报出的渠道数与模型规则数是文件里的条数，与 config get 的口径一致；顶层账号展开出来
+的候选（pool/team-a）不在其中，要看运行时形态用 models list --model 或 run --dry-run。
+
 配置不合法时以状态码 1 退出，配置文件路径不存在时也不通过。`,
 		Example: `  tokenmp config validate
   tokenmp config validate --config /etc/tokenmp/config.yaml

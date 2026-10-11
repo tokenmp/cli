@@ -42,9 +42,10 @@ func newConfigShowCmd(opts *configOptions) *cobra.Command {
 --format yaml 给不带装饰的配置文本，适合重定向成一份新配置；--format json 给机器
 可读的形状。--json 等同于 --format json。
 
-三种格式看到的都是生效配置，不是文件原文，因此没写在文件里的 listen、timeout、
-max_retries 也会出现。yaml 与 json 不打印空值字段：空字符串、空段落与空列表只表示
-没写，没有信息量。`,
+输出按文件里的写法：顶层 accounts 与渠道的 auth.accounts 原样保留，渠道名与
+models 下标也与文件一致；没写在文件里的 listen、timeout、max_retries 会补齐。
+运行时的展开形态（pool 变成 pool/team-a）用 models list --model 或 run --dry-run 看。
+yaml 与 json 不打印空值字段：空字符串、空段落与空列表只表示没写，没有信息量。`,
 		Example: `  tokenmp config show
   tokenmp config show --format yaml > /tmp/effective.yaml
   tokenmp config show --format json

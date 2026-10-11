@@ -1,12 +1,19 @@
 // Package configmgr 加载配置文件，并把配置还原成与文件同形的通用值，供 config 命令
 // 取值、改写与输出。装配只发生在这里，命令层只负责取值与呈现。
+//
+// 配置有两个形态：按文件原样解析的那份保留顶层 accounts 与渠道的 auth.accounts，
+// 名字与下标与配置文件一一对应；展开之后的那份没有账号层，渠道名变成运行时用的
+// pool/team-a 这种写法。写回走 configedit，是在文件的 YAML 节点上按路径与下标定点
+// 改写，因此凡是要拿名字或下标写回的命令都读按文件原样解析的那份。
 package configmgr
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,6 +29,9 @@ import (
 var SettablePaths = []string{"listen", "log.format", "log.level", "plugins.dir"}
 
 // Env 是一次 config 命令用到的上下文。
+//
+// 除非用的是 LoadExpanded，Config 都是按文件原样解析的那份：顶层 accounts 还在，
+// 渠道名与 models 的下标与配置文件一一对应。
 type Env struct {
 	// ConfigPath 是配置文件的绝对路径。
 	ConfigPath string
@@ -34,8 +44,46 @@ type Env struct {
 }
 
 // Open 读取并校验配置。配置文件不存在不算错误：只看目录的命令不必先有配置。
+//
+// 返回的是按文件原样解析的形态，顶层账号没有展开。要反映运行时形态的命令用
+// LoadExpanded。
 func Open(configPath string) (*Env, error) {
-	cfg, hasConfig, err := Inspect(configPath)
+	return openWith(configPath, Inspect)
+}
+
+// Load 读取并校验配置，配置文件不存在时报错。
+//
+// 返回的是按文件原样解析的形态：需要按名字或下标写回配置的命令用它，位置才与
+// 文件里的写法一致。
+func Load(configPath string) (*Env, error) {
+	env, err := Open(configPath)
+	if err != nil {
+		return nil, err
+	}
+	if !env.HasConfig {
+		return nil, fmt.Errorf("配置文件 %s 不存在，用 tokenmp config init 生成一份", configPath)
+	}
+	return env, nil
+}
+
+// LoadExpanded 读取并校验配置，返回展开顶层账号之后的形态。
+//
+// 只有反映运行时的命令用它：run 与 test 按展开后的渠道装配服务，models list 的
+// 候选试算也按展开后的规则，那才是服务实际会用的候选。其余命令按文件原样读，见 Load。
+func LoadExpanded(configPath string) (*Env, error) {
+	env, err := openWith(configPath, inspectExpanded)
+	if err != nil {
+		return nil, err
+	}
+	if !env.HasConfig {
+		return nil, fmt.Errorf("配置文件 %s 不存在，用 tokenmp config init 生成一份", configPath)
+	}
+	return env, nil
+}
+
+// openWith 走完「读配置、定位目录、补相对路径」的公共流程。inspect 决定读哪一份形态。
+func openWith(configPath string, inspect func(string) (*config.Config, bool, error)) (*Env, error) {
+	cfg, hasConfig, err := inspect(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +91,7 @@ func Open(configPath string) (*Env, error) {
 	if err != nil {
 		return nil, fmt.Errorf("解析配置文件路径失败: %w", err)
 	}
-	// 配置文件不存在时 core 没机会归一相对路径，这里补上，让输出的插件目录与
+	// 配置文件不存在时解析器没机会归一相对路径，这里补上，让输出的插件目录与
 	// 有配置文件时一致。
 	if !hasConfig && !filepath.IsAbs(cfg.Plugins.Dir) {
 		cfg.Plugins.Dir = filepath.Join(filepath.Dir(absolute), cfg.Plugins.Dir)
@@ -56,23 +104,28 @@ func Open(configPath string) (*Env, error) {
 	}, nil
 }
 
-// Load 读取并校验配置，配置文件不存在时报错。
-func Load(configPath string) (*Env, error) {
-	env, err := Open(configPath)
-	if err != nil {
-		return nil, err
-	}
-	if !env.HasConfig {
-		return nil, fmt.Errorf("配置文件 %s 不存在，用 tokenmp config init 生成一份", configPath)
-	}
-	return env, nil
-}
-
 // Inspect 读取并校验配置，把校验错误原样返回，让调用方决定怎么呈现。
 //
 // 第二个返回值只回答「文件在不在」：文件在但不合法时它仍为真，错误由第三个返回值
 // 给出。配置文件不存在时返回一份只剩默认值的空配置与假值，不算错误。
+//
+// 返回的是按文件原样解析的形态，路径与下标口径与 config get 一致。
 func Inspect(configPath string) (*config.Config, bool, error) {
+	cfg, err := parseConfigFile(configPath)
+	switch {
+	case err == nil:
+		return cfg, true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		empty := &config.Config{}
+		empty.Defaults()
+		return empty, false, nil
+	default:
+		return nil, true, err
+	}
+}
+
+// inspectExpanded 与 Inspect 同理，只是在返回之前按 core 的 Parse 展开顶层账号。
+func inspectExpanded(configPath string) (*config.Config, bool, error) {
 	cfg, err := config.Load(configPath)
 	switch {
 	case err == nil:
@@ -84,6 +137,51 @@ func Inspect(configPath string) (*config.Config, bool, error) {
 	default:
 		return nil, true, err
 	}
+}
+
+// parseConfigFile 按配置文件里的原样解析：顶层 accounts 与渠道的 auth.accounts 都
+// 留在返回值里，不做 Expand。
+//
+// core 的 config.Parse 在返回之前自己会展开一次，因此这个形态只能这边自己拼：解码开启
+// KnownFields，填默认值、校验、补绝对路径，再把 plugins.dir 这类相对路径按配置目录
+// 归一。最后一步与 core 的 resolvePaths 同一套规则，那份没有导出，这里照写。
+//
+// 展开之后的形态也校验一次：展开名与手写渠道名撞车这类问题只在平铺形态里出现，
+// 少这一步会漏掉；core 的 Parse 同样校验两次。
+func parseConfigFile(path string) (*config.Config, error) {
+	//nolint:gosec // 路径来自调用方：配置文件位置由使用者给出。
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	var cfg config.Config
+	decoder := yaml.NewDecoder(file)
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("配置文件为空")
+		}
+		return nil, err
+	}
+	cfg.Defaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Expand().Validate(); err != nil {
+		return nil, err
+	}
+
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("解析配置文件路径失败: %w", err)
+	}
+	cfg.Path = absolute
+	if cfg.Plugins.Dir != "" && !filepath.IsAbs(cfg.Plugins.Dir) {
+		cfg.Plugins.Dir = filepath.Join(filepath.Dir(absolute), cfg.Plugins.Dir)
+	}
+	return &cfg, nil
 }
 
 // Generic 把配置还原成与配置文件同形的通用值，字段名沿用 yaml 标签。
@@ -104,7 +202,7 @@ func (e *Env) Generic() (map[string]any, error) {
 
 // Pruned 返回去掉空值的配置视图，字段顺序与配置文件一致。
 //
-// 生效配置里的默认值保留，空字符串、空段落、空列表与 null 不出现：它们只表示
+// 加载后的默认值保留，空字符串、空段落、空列表与 null 不出现：它们只表示
 // 「没写」，没有信息量。--json 输出用这个形状。
 func (e *Env) Pruned() (map[string]any, error) {
 	encoded, err := e.PrunedYAML()
@@ -118,7 +216,7 @@ func (e *Env) Pruned() (map[string]any, error) {
 	return generic, nil
 }
 
-// PrunedYAML 把生效配置编码成两格缩进的 YAML，并去掉空值字段。
+// PrunedYAML 把加载后的配置编码成两格缩进的 YAML，并去掉空值字段。
 //
 // 先编码成节点再删空值，而不是先转成 map：节点保留了结构体的字段顺序，转 map 之后
 // 字段会按名称排序。
@@ -219,6 +317,7 @@ func (e *Env) Value(path string) (any, error) {
 
 // Set 改写一个标量字段，写回后重新加载校验；校验失败时还原原文件。
 //
+// 路径按文件原样解析的那份配置判断存不存在，与 config get 同一套口径。
 // 只接受已经存在的标量路径与 SettablePaths 里的路径。指向段落或列表的路径会被拒绝：
 // 整体替换段落几乎总是笔误，而且会连带删掉里面的注释。
 func (e *Env) Set(path, value string) error {
