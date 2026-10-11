@@ -39,14 +39,15 @@ func newModelsCmd() *cobra.Command {
 delete 收这个序号，也接受 --match 加 --channel 的定位写法。
 create 引用了不存在的渠道时报错，重名的规则不覆盖。
 
-不带子命令时进入交互界面：
+不带子命令时进入分步管理：先打印与 list 相同的规则表，再问做什么。
 
-- ↑/↓ 或 j/k 移动，PgUp/PgDn 翻页，Home/End 跳到首尾
-- d 删除选中规则，删除前确认
-- q 或 Ctrl-C 退出
+- 先选新建、编辑、删除或退出；编辑与删除还要从列表里选一条
+- 选一项后一个字段一个问题地问下去，编辑时每个字段的默认值是当前值，回车即保留
+- channel 只能从配置里已有的渠道里选，match 用 core 的匹配式校验
+- 每次只写变化过的字段，写回前打印将要写入的条目并再确认一次
+- Esc 或 Ctrl-C 中断当前这件，回到菜单；在菜单上中断则退出，两种情况下都不落盘
 
-输出不是终端时打印与 models list 相同的规则表，不做交互。--json 只在非终端时生效，
-进交互时报错。`,
+输出不是终端时打印与 models list 相同的规则表，不做交互。--json 只在非终端时生效，进交互时报错。`,
 		Example: `  # 看现有规则
   tokenmp models list
 
@@ -99,7 +100,7 @@ func runModels(cmd *cobra.Command, opts *modelsOptions, interactive bool) error 
 	if opts.jsonOut {
 		return errors.New("--json 与交互模式不能同时使用：去掉 --json，或把输出重定向到文件")
 	}
-	return runBrowse(cmd, modelBrowseList(opts.configPath))
+	return runModelsManage(cmd, opts.configPath)
 }
 
 // modelRow 是一条模型路由规则，也是 --json 的输出形状。
