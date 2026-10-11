@@ -5,6 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tokenmp/core/config"
+
 	"github.com/tokenmp/cli/internal/configmgr"
 )
 
@@ -35,35 +37,39 @@ path 为空表示按方言取默认路径，timeout 与 max_retries 是填过默
 				return err
 			}
 
-			rows := channelRows(env.Config)
-
 			if jsonOut {
-				return printJSON(cmd, rows)
+				return printJSON(cmd, channelRows(env.Config))
 			}
-
-			writer := out(cmd)
-			if len(rows) == 0 {
-				fmt.Fprintln(writer, "配置里没有渠道")
-				return nil
-			}
-
-			renderer := newTable().Headers("渠道", "方言", "基址", "路径", "鉴权", "凭据", "超时", "重试")
-			var missing []string
-			for _, row := range rows {
-				if row.Credential == credentialMissing {
-					missing = append(missing, row.Name)
-				}
-				renderer.Row(row.Name, row.Dialect, row.BaseURL, dash(row.Path), row.Auth, credentialText(row.Credential), row.Timeout, fmt.Sprintf("%d", row.MaxRetries))
-			}
-			fmt.Fprintln(writer, renderer.Render())
-
-			if len(missing) > 0 {
-				fmt.Fprintf(writer, "\n%s%s\n", palette.warn.Render("凭据环境变量没有设置："), joinList(missing))
-			}
-			return nil
+			return printChannelsList(cmd, env.Config)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "以 JSON 输出，便于脚本处理")
 	return cmd
+}
+
+// printChannelsList 打印渠道表与缺凭据提示，channels list 与交互模式的非终端退化共用。
+func printChannelsList(cmd *cobra.Command, cfg *config.Config) error {
+	rows := channelRows(cfg)
+
+	writer := out(cmd)
+	if len(rows) == 0 {
+		fmt.Fprintln(writer, "配置里没有渠道")
+		return nil
+	}
+
+	renderer := newTable().Headers("渠道", "方言", "基址", "路径", "鉴权", "凭据", "超时", "重试")
+	var missing []string
+	for _, row := range rows {
+		if row.Credential == credentialMissing {
+			missing = append(missing, row.Name)
+		}
+		renderer.Row(row.Name, row.Dialect, row.BaseURL, dash(row.Path), row.Auth, credentialText(row.Credential), row.Timeout, fmt.Sprintf("%d", row.MaxRetries))
+	}
+	fmt.Fprintln(writer, renderer.Render())
+
+	if len(missing) > 0 {
+		fmt.Fprintf(writer, "\n%s%s\n", palette.warn.Render("凭据环境变量没有设置："), joinList(missing))
+	}
+	return nil
 }
