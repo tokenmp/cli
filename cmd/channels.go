@@ -127,11 +127,14 @@ type channelEntry struct {
 }
 
 // authEntry 是写回配置的鉴权段。
+//
+// Accounts 与 KeyEnv 同形写回：渠道引用顶层账号时写 accounts，单个账号直接写 key_env。
 type authEntry struct {
-	Style  string `yaml:"style,omitempty"`
-	KeyEnv string `yaml:"key_env,omitempty"`
-	Header string `yaml:"header,omitempty"`
-	Query  string `yaml:"query,omitempty"`
+	Style    string   `yaml:"style,omitempty"`
+	KeyEnv   string   `yaml:"key_env,omitempty"`
+	Accounts []string `yaml:"accounts,omitempty"`
+	Header   string   `yaml:"header,omitempty"`
+	Query    string   `yaml:"query,omitempty"`
 }
 
 // channelEntryOf 把配置里的渠道还原成写回形状，可选字段为空时不带出来。
@@ -141,7 +144,7 @@ func channelEntryOf(record config.Channel) channelEntry {
 		Dialect:    record.Dialect,
 		BaseURL:    record.BaseURL,
 		Path:       record.Path,
-		Auth:       authEntry{Style: record.Auth.Style, KeyEnv: record.Auth.KeyEnv, Header: record.Auth.Header, Query: record.Auth.Query},
+		Auth:       authEntry{Style: record.Auth.Style, KeyEnv: record.Auth.KeyEnv, Accounts: record.Auth.Accounts, Header: record.Auth.Header, Query: record.Auth.Query},
 		Timeout:    record.Timeout,
 		MaxRetries: record.MaxRetries,
 		Headers:    record.Headers,

@@ -24,6 +24,7 @@ TokenMP 的命令行工具。目前提供版本查询、启动与测试转发服
 | `tokenmp run` | 启动转发服务，见下 | `tokenmp run --config /etc/tokenmp/config.yaml` |
 | `tokenmp test` | 进程内起服务发一条测试请求，见下 | `tokenmp test --model deepseek-chat --dialect claude` |
 | `tokenmp channels <子命令>` | 渠道的增删查，见下 | `tokenmp channels list` |
+| `tokenmp accounts <子命令>` | 顶层账号的增删查，见下 | `tokenmp accounts list` |
 | `tokenmp models <子命令>` | 模型路由规则的增删查，见下 | `tokenmp models list --model gpt-4o` |
 | `tokenmp import` | 从 new-api 导出的渠道列表追加渠道与规则，见下 | `tokenmp import --from new-api --file channels.json` |
 | `tokenmp plugin <子命令>` | 本地插件管理，见下 | `tokenmp plugin list` |
@@ -259,7 +260,7 @@ $ tokenmp config show
 | `channels create` | 追加一个渠道 | `tokenmp channels create --name openrouter --dialect openai --base-url https://openrouter.ai/api/v1 --path /chat/completions --key-env OPENROUTER_API_KEY` |
 | `channels delete`、`channels remove` | 删除一个渠道 | `tokenmp channels delete openrouter` |
 
-`create` 追加前按渠道规则校验，例如 `base_url` 带了路径却没给 `path`、鉴权方式与参数对不上，都在写文件之前拦下。`--auth-style` 不写时按 `--key-env` 推断：给了就是 `bearer`，没给就是 `none`。渠道名重复时报错，不覆盖。删除仍被 `models` 段引用的渠道会被拒绝，并列出引用它的规则。
+`create` 追加前按渠道规则校验，例如 `base_url` 带了路径却没给 `path`、鉴权方式与参数对不上，都在写文件之前拦下。`--auth-style` 不写时按凭据来源推断：给了 `--key-env` 或 `--accounts` 就是 `bearer`，都没给就是 `none`。`--accounts` 给出顶层账号名（逗号分隔），与 `--key-env` 互斥，引用了不存在的账号会报错。渠道名重复时报错，不覆盖。删除仍被 `models` 段引用的渠道会被拒绝，并列出引用它的规则。
 
 `list` 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。缺凭据的渠道会在表下列出。
 
@@ -293,6 +294,40 @@ $ tokenmp channels list
  openrouter  openai  https://openrouter.ai/api/v1  /chat/completions  bearer ← OPENROUTER_API_KEY  未设置  2m0s  0
 
 凭据环境变量没有设置：example、openrouter
+```
+
+## 顶层账号
+
+`tokenmp accounts` 管理配置顶层 `accounts` 段里的账号。账号是顶层的凭据清单，渠道在
+`auth.accounts` 里按名字引用它，加载时展开成多条渠道，展开名是「渠道名/账号名」。
+
+| 子命令 | 作用 | 示例 |
+| --- | --- | --- |
+| `accounts list` | 列出账号、凭据状态、引用它的渠道与请求头数量 | `tokenmp accounts list --json` |
+| `accounts create` | 追加一个账号，`--header` 可重复 | `tokenmp accounts create --name team-c --key-env TEAM_C_API_KEY --header x-workspace=team-c` |
+| `accounts delete`、`accounts remove` | 删除一个账号 | `tokenmp accounts delete team-c` |
+
+账号级请求头用于上游按 workspace 或 organization 隔离，是这一层存在的理由；
+`--header k=v` 可重复，同名时账号的头覆盖渠道的头。删除仍被渠道在 `auth.accounts` 里
+引用的账号会被拒绝，并列出引用它的渠道与它们在 `channels` 段里的下标。
+
+`tokenmp accounts` 不带子命令时和 `channels` 一样进入分步管理：先打印与 `accounts list`
+相同的表格，再问新建、编辑、删除或退出；每次只写变化过的字段，写回前再确认一次，
+Esc 或 Ctrl-C 不落盘。输出不是终端时打印与 `accounts list` 相同的表格；`--json` 只在
+非终端时生效，进交互时报错。
+
+core 要求每个顶层账号都被至少一条渠道引用。新建账号到它被渠道引用之间是一段中间
+状态，此时 `config validate` 与 `run` 会拒绝这份配置，但 `accounts` 命令与
+`channels create` 仍能读写它，好让 `tokenmp accounts create` 之后直接用
+`tokenmp channels create --accounts` 接上引用。
+
+```
+$ tokenmp accounts list
+ 账号    key_env        凭据    引用渠道  请求头
+ team-a  TEAM_A_API_KEY  未设置  pool      1
+ team-b  TEAM_B_API_KEY  未设置  pool      0
+
+凭据环境变量没有设置：team-a、team-b
 ```
 
 ## 模型规则
@@ -568,6 +603,11 @@ make clean
 | [cmd/config_validate.go](cmd/config_validate.go) | 校验并列出全部问题 |
 | [cmd/config_get.go](cmd/config_get.go) | 按路径取值 |
 | [cmd/config_set.go](cmd/config_set.go) | 改写一个标量字段 |
+| [cmd/accounts.go](cmd/accounts.go) | `accounts` 命令组与账号整理的共用逻辑 |
+| [cmd/accounts_list.go](cmd/accounts_list.go) | 账号表、凭据状态与引用渠道 |
+| [cmd/accounts_create.go](cmd/accounts_create.go) | 追加账号并校验 |
+| [cmd/accounts_delete.go](cmd/accounts_delete.go) | 删除账号，拒绝删除被引用的账号 |
+| [cmd/accounts_manage.go](cmd/accounts_manage.go) | 账号的分步新建、编辑与删除 |
 | [cmd/channels.go](cmd/channels.go) | `channels` 命令组与渠道整理的共用逻辑 |
 | [cmd/channels_list.go](cmd/channels_list.go) | 渠道表与凭据状态 |
 | [cmd/channels_create.go](cmd/channels_create.go) | 追加渠道并校验 |
@@ -593,7 +633,7 @@ make clean
 | [internal/metrics](internal/metrics/metrics.go) | 账目与指标行的口径：TTFT、TPS |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 
-帮助里出现 `help`、`version`、`run`、`test`、`channels`、`models`、`import`、`plugin`、
+帮助里出现 `help`、`version`、`run`、`test`、`accounts`、`channels`、`models`、`import`、`plugin`、
 `config` 与 `completion`。fang
 自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
 `fang.WithoutManpage()` 一行即可恢复。cobra 的 `completion` 在

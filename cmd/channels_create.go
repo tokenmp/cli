@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -33,6 +34,7 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 		baseURL     string
 		path        string
 		keyEnv      string
+		accountsRaw string
 		authStyle   string
 		authHeader  string
 		authQuery   string
@@ -49,8 +51,12 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 渠道名重复时报错，不覆盖已有的条目。追加前先按渠道规则校验，例如 base_url 带了路径
 却没给 path、鉴权方式与参数对不上，都在写文件之前拦下。
 
---auth-style 不写时按 --key-env 推断：给了 key-env 就是 bearer，没给就是 none。
-取值是 bearer、x-api-key、query、custom 与 none。
+--auth-style 不写时按凭据来源推断：给了 --key-env 或 --accounts 就是 bearer，
+都没给就是 none。取值是 bearer、x-api-key、query、custom 与 none。
+
+--accounts 给出顶层账号名（逗号分隔），渠道的 auth.accounts 照此写回，加载时展开成
+多条渠道。它与 --key-env 互斥，引用了不存在的账号时报错，文案与 core 的校验一致。
+带 --accounts 的渠道要在 accounts 段里先有那些账号，用 tokenmp accounts create 建。
 
 写回保留注释与缩进，写回后重新加载校验，配置不合法就还原原文件，与 config set 同一套。
 没有写在配置里的可选字段不会被写出来。`,
@@ -59,6 +65,9 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 
   # 基址自带路径时必须给出 path
   tokenmp channels create --name openrouter --dialect openai --base-url https://openrouter.ai/api/v1 --path /chat/completions --key-env OPENROUTER_API_KEY
+
+  # 引用两个顶层账号，加载时展开成 pool/team-a 与 pool/team-b 两条
+  tokenmp channels create --name pool --dialect openai --base-url https://api.example.com/v1 --path /chat/completions --accounts team-a,team-b
 
   # 不鉴权的本地假上游，先看将要写什么
   tokenmp channels create --name local --dialect openai --base-url http://127.0.0.1:8080 --dry-run`,
@@ -80,16 +89,30 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 				return fmt.Errorf("鉴权方式 %q 不是支持的取值，可选 %s", authStyle, joinList(channelAuthStyles))
 			}
 
-			env, err := configmgr.Load(opts.configPath)
+			accountNames := parseAccountList(accountsRaw)
+			if len(accountNames) > 0 && keyEnv != "" {
+				return errors.New("auth.accounts 与 auth.key_env 互斥，只能写一个")
+			}
+			if len(accountNames) > 0 && authStyle == channel.StyleNone {
+				return errors.New("引用账号需要一种使用凭据的鉴权方式，--auth-style 不能是 none")
+			}
+
+			env, err := configmgr.LoadAccounts(opts.configPath)
 			if err != nil {
 				return err
 			}
 			if _, exists := env.Config.ChannelByName(name); exists {
 				return fmt.Errorf("渠道 %s 已存在，不能覆盖", name)
 			}
+			for _, accountName := range accountNames {
+				if _, ok := accountByName(env.Config, accountName); !ok {
+					// 文案与 core 的校验一致，只是把下标算在新渠道将要落在的位置上。
+					return fmt.Errorf("channels[%d].auth.accounts: 引用了不存在的账号 %s", len(env.Config.Channels), accountName)
+				}
+			}
 
 			if authStyle == "" {
-				if keyEnv != "" {
+				if keyEnv != "" || len(accountNames) > 0 {
 					authStyle = channel.StyleBearer
 				} else {
 					authStyle = channel.StyleNone
@@ -98,12 +121,18 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 
 			// 先按渠道规则校验。core 的 config.Validate 只看 base_url 非空、
 			// 是不是 http 前缀，看不出「带了路径却没给 path」，那条规则只在这里。
+			specAuth := coreAuth(authStyle, keyEnv, authHeader, authQuery)
+			if len(accountNames) > 0 && specAuth.KeyEnv == "" {
+				// channel.Spec 没有账号层，拿占位 key_env 过掉它的鉴权非空检查；
+				// 账号引用是否存在由 core 的 config.Validate 在写回校验里把关。
+				specAuth.KeyEnv = "-"
+			}
 			spec := channel.Spec{
 				Name:       name,
 				Dialect:    dialect.Name(dialectName),
 				BaseURL:    baseURL,
 				Path:       path,
-				Auth:       coreAuth(authStyle, keyEnv, authHeader, authQuery),
+				Auth:       specAuth,
 				Timeout:    timeout,
 				MaxRetries: maxRetries,
 			}
@@ -116,7 +145,7 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 				Dialect: dialectName,
 				BaseURL: baseURL,
 				Path:    path,
-				Auth:    config.Auth{Style: authStyle, KeyEnv: keyEnv, Header: authHeader, Query: authQuery},
+				Auth:    config.Auth{Style: authStyle, KeyEnv: keyEnv, Accounts: accountNames, Header: authHeader, Query: authQuery},
 				Timeout: config.Duration(timeout),
 			}
 			if authStyle == channel.StyleNone {
@@ -152,7 +181,8 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 	flags.StringVar(&baseURL, "base-url", "", "渠道基址，例如 https://api.openai.com")
 	flags.StringVar(&path, "path", "", "上游路径，基址带了路径时必须给出")
 	flags.StringVar(&keyEnv, "key-env", "", "凭据所在的环境变量名")
-	flags.StringVar(&authStyle, "auth-style", "", "鉴权方式：bearer、x-api-key、query、custom 或 none，缺省按 --key-env 推断")
+	flags.StringVar(&accountsRaw, "accounts", "", "引用的顶层账号名，逗号分隔；与 --key-env 互斥")
+	flags.StringVar(&authStyle, "auth-style", "", "鉴权方式：bearer、x-api-key、query、custom 或 none，缺省按凭据来源推断")
 	flags.StringVar(&authHeader, "auth-header", "", "auth-style 为 custom 时的请求头名")
 	flags.StringVar(&authQuery, "auth-query", "", "auth-style 为 query 时的查询参数名")
 	flags.DurationVar(&timeout, "timeout", 2*time.Minute, "单次请求的整体超时")
@@ -165,6 +195,25 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 // coreAuth 把命令行取值装成 core 的鉴权描述。
 func coreAuth(style, keyEnv, header, query string) channel.Auth {
 	return channel.Auth{Style: style, KeyEnv: keyEnv, Header: header, Query: query}
+}
+
+// parseAccountList 把 --accounts 的逗号分隔写法解析成账号名序列。
+//
+// 保持给出的顺序，空格与空段丢掉；重复的名字不在这里拦，core 展开之后的渠道重名校验
+// 会报出来，文案里带的是展开名。
+func parseAccountList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	names := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // inChannelAuthStyles 报告鉴权方式是否在允许集合内。

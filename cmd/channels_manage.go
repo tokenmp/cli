@@ -172,8 +172,9 @@ func editChannelInteractive(cmd *cobra.Command, env *configmgr.Env, index int) e
 		}
 	}
 	entry := channelEntryOf(record)
-	// 请求头不在这套分步流程的管理范围内，预览里补上现有的值，与实际结果一致。
+	// 请求头与账号引用不在这套分步流程的管理范围内，预览里补上现有的值，与实际结果一致。
 	entry.Headers = current.Headers
+	entry.Auth.Accounts = current.Auth.Accounts
 
 	if len(channelEditFields(current, entry)) == 0 {
 		fmt.Fprintln(out(cmd), palette.label.Render("没有改动"))

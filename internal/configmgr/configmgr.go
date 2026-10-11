@@ -66,6 +66,26 @@ func Load(configPath string) (*Env, error) {
 	return env, nil
 }
 
+// LoadAccounts 与 Load 相同，只在读入时放行「顶层账号没有被任何渠道引用」这一条。
+//
+// 顶层账号是「渠道按名字引用」的加载期形态，于是新建一个账号到它被渠道引用之间、
+// 以及账号刚被解除引用还没删掉时，配置都会处于「账号没人引用」的中间状态。这个状态
+// 下 core 的 config.Load 会拒绝，但文件本身是好的，accounts 命令组的读入与写回校验
+// 用它就能继续管理这份配置；channels create 也用它读入，好让新建的账号能立刻接上引用。
+//
+// 约束仍在别处把关：config validate 与 command run / test 用严格校验，服务不会带着
+// 没人引用的账号启动；写回校验见 accountsReloadableCheck，除这一条外的问题照常报错。
+func LoadAccounts(configPath string) (*Env, error) {
+	env, err := openWith(configPath, inspectManaging)
+	if err != nil {
+		return nil, err
+	}
+	if !env.HasConfig {
+		return nil, fmt.Errorf("配置文件 %s 不存在，用 tokenmp config init 生成一份", configPath)
+	}
+	return env, nil
+}
+
 // LoadExpanded 读取并校验配置，返回展开顶层账号之后的形态。
 //
 // 只有反映运行时的命令用它：run 与 test 按展开后的渠道装配服务，models list 的
@@ -111,7 +131,19 @@ func openWith(configPath string, inspect func(string) (*config.Config, bool, err
 //
 // 返回的是按文件原样解析的形态，路径与下标口径与 config get 一致。
 func Inspect(configPath string) (*config.Config, bool, error) {
-	cfg, err := parseConfigFile(configPath)
+	return inspectWith(configPath, false)
+}
+
+// inspectManaging 与 Inspect 同理，放行「顶层账号没有被任何渠道引用」这一条，
+// 供 LoadAccounts 使用。
+func inspectManaging(configPath string) (*config.Config, bool, error) {
+	return inspectWith(configPath, true)
+}
+
+// inspectWith 走完「按文件原样解析、判断文件在不在」的公共流程。
+// tolerateUnreferenced 决定是否放行没人引用的顶层账号。
+func inspectWith(configPath string, tolerateUnreferenced bool) (*config.Config, bool, error) {
+	cfg, err := parseConfigFileWith(configPath, tolerateUnreferenced)
 	switch {
 	case err == nil:
 		return cfg, true, nil
@@ -139,7 +171,7 @@ func inspectExpanded(configPath string) (*config.Config, bool, error) {
 	}
 }
 
-// parseConfigFile 按配置文件里的原样解析：顶层 accounts 与渠道的 auth.accounts 都
+// parseConfigFileWith 按配置文件里的原样解析：顶层 accounts 与渠道的 auth.accounts 都
 // 留在返回值里，不做 Expand。
 //
 // core 的 config.Parse 在返回之前自己会展开一次，因此这个形态只能这边自己拼：解码开启
@@ -148,7 +180,12 @@ func inspectExpanded(configPath string) (*config.Config, bool, error) {
 //
 // 展开之后的形态也校验一次：展开名与手写渠道名撞车这类问题只在平铺形态里出现，
 // 少这一步会漏掉；core 的 Parse 同样校验两次。
-func parseConfigFile(path string) (*config.Config, error) {
+//
+// tolerateUnreferenced 为真时在动手校验之前把没人引用的账号从副本里去掉，从而放行
+// core 的「顶层账号没有被任何渠道引用」。账号条目本身仍然按文件原样返回，写回时也
+// 不会少写。被去掉的只是没人引用的账号：它们自己的字段校验在这里略过，由账号命令在
+// 写入前把关；被引用的账号照旧参与校验。
+func parseConfigFileWith(path string, tolerateUnreferenced bool) (*config.Config, error) {
 	//nolint:gosec // 路径来自调用方：配置文件位置由使用者给出。
 	file, err := os.Open(path)
 	if err != nil {
@@ -166,10 +203,16 @@ func parseConfigFile(path string) (*config.Config, error) {
 		return nil, err
 	}
 	cfg.Defaults()
-	if err := cfg.Validate(); err != nil {
+	checked := &cfg
+	if tolerateUnreferenced {
+		pruned := cfg
+		pruned.Accounts = referencedAccounts(cfg)
+		checked = &pruned
+	}
+	if err := checked.Validate(); err != nil {
 		return nil, err
 	}
-	if err := cfg.Expand().Validate(); err != nil {
+	if err := checked.Expand().Validate(); err != nil {
 		return nil, err
 	}
 
@@ -182,6 +225,24 @@ func parseConfigFile(path string) (*config.Config, error) {
 		cfg.Plugins.Dir = filepath.Join(filepath.Dir(absolute), cfg.Plugins.Dir)
 	}
 	return &cfg, nil
+}
+
+// referencedAccounts 只留下被至少一条渠道引用的账号，供 parseConfigFileWith 的
+// 宽容校验使用。顺序按文件里的先后。
+func referencedAccounts(cfg config.Config) []config.Account {
+	referenced := make(map[string]bool, len(cfg.Accounts))
+	for _, channel := range cfg.Channels {
+		for _, name := range channel.Auth.Accounts {
+			referenced[name] = true
+		}
+	}
+	kept := make([]config.Account, 0, len(cfg.Accounts))
+	for _, account := range cfg.Accounts {
+		if referenced[account.Name] {
+			kept = append(kept, account)
+		}
+	}
+	return kept
 }
 
 // Generic 把配置还原成与配置文件同形的通用值，字段名沿用 yaml 标签。
