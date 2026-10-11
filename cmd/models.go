@@ -33,7 +33,8 @@ func newModelsCmd() *cobra.Command {
 - match 支持 * 与 ? 通配，同一个模型可以有多条规则
 - upstream 为空表示用请求里的模型名；写了 ${model} 就替换成请求里的模型名
 - dialect 为空表示用渠道的方言
-- affinity 是渠道亲和的组名，同组候选在运行时可互换
+- affinity 是渠道亲和的组名，同组候选在运行时可互换，池内顺序按会话标识决定，
+  list --model 的试算只给配置顺序
 
 规则没有名字，list 的表里给出序号，口径与 config get models.0 的下标一致；
 delete 收这个序号，也接受 --match 加 --channel 的定位写法。
@@ -194,6 +195,34 @@ func routeRows(cfg *config.Config, model string) []routeRow {
 		})
 	}
 	return rows
+}
+
+// affinityReorderable 报告试算出的候选在运行时会不会被亲和重排，会重排时返回组名与池内候选数。
+//
+// 与 core 的 server.affinityPool 同口径：组名取第一条带组名的候选，只有组名相同的
+// 候选组成一个池，池里不足两条时亲和没有可分配的对象，顺序与配置一致。试算没有会话
+// 标识，重排的结果只有运行时才知道，所以这里只负责说明，不重排。
+func affinityReorderable(routes []routeRow) (string, int) {
+	group := ""
+	for _, route := range routes {
+		if route.Affinity != "" {
+			group = route.Affinity
+			break
+		}
+	}
+	if group == "" {
+		return "", 0
+	}
+	count := 0
+	for _, route := range routes {
+		if route.Affinity == group {
+			count++
+		}
+	}
+	if count < 2 {
+		return "", 0
+	}
+	return group, count
 }
 
 // upstreamText 说明上游模型名的来源。

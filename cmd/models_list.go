@@ -27,7 +27,11 @@ func newModelsListCmd(opts *modelsOptions) *cobra.Command {
  - affinity 是渠道亲和的组名，同组候选在运行时可互换，留空表示不参与
 
 带 --model 时按规则试算，列出这个模型名会按什么顺序落到哪些渠道上，
-upstream 里的占位符按这个模型名替换后给出。没有匹配的规则时列表为空。`,
+upstream 里的占位符按这个模型名替换后给出。没有匹配的规则时列表为空。
+
+试算给出的是配置顺序。配了 affinity 时，同一个组的候选在运行时还会按会话标识
+重排，粘住其中一条；重排的结果取决于请求，试算给不出来，所以遇到这种情况会
+在表后说明一句。`,
 		Example: `  # 看规则表
   tokenmp models list
 
@@ -70,6 +74,11 @@ upstream 里的占位符按这个模型名替换后给出。没有匹配的规�
 				routes.Row(fmt.Sprintf("%d", index+1), route.Channel, route.Upstream, route.Dialect, dash(route.Affinity))
 			}
 			fmt.Fprintln(writer, routes.Render())
+			if group, count := affinityReorderable(output.Routes); group != "" {
+				fmt.Fprintf(writer, "%s\n", palette.warn.Render(fmt.Sprintf(
+					"注：亲和组 %s 的 %d 条候选在运行时按会话标识重排，上表给的是配置顺序。",
+					group, count)))
+			}
 			return nil
 		},
 	}
