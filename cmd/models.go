@@ -144,7 +144,7 @@ type modelEntry struct {
 	Affinity string `yaml:"affinity,omitempty"`
 }
 
-// modelEntryOf 把生效配置里的规则还原成写回形状，可选字段为空时不带出来。
+// modelEntryOf 把配置里的规则还原成写回形状，可选字段为空时不带出来。
 func modelEntryOf(rule config.Model) modelEntry {
 	return modelEntry{
 		Match:    rule.Match,

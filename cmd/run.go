@@ -117,7 +117,8 @@ func assemble(
 	newLogs func(config.Log, io.Writer) logging.Loggers,
 	onDone func(logging.Loggers, server.Outcome),
 ) (*assembly, error) {
-	env, err := configmgr.Load(configPath)
+	// 装配面向运行时：顶层账号展开之后的渠道与规则才是服务实际会用的那份。
+	env, err := configmgr.LoadExpanded(configPath)
 	if err != nil {
 		return nil, err
 	}

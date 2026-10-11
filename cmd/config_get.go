@@ -18,7 +18,8 @@ func newConfigGetCmd(opts *configOptions) *cobra.Command {
 例如 listen、log.level、channels.0.base_url、plugins.list.0.key。
 取到的段落或列表按 JSON 输出。
 
-看到的是填过默认值之后的取值，没写在文件里的字段也能取到。`,
+按文件里的写法取：顶层 accounts 及其下标也在，与文件一一对应；没写在文件里的字段
+则给出填过默认值之后的取值。`,
 		Example: `  tokenmp config get listen
   tokenmp config get log.level
   tokenmp config get channels.0.base_url

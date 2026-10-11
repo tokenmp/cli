@@ -32,7 +32,7 @@ type manageItem struct {
 // 列表本身统一打印与 list 子命令相同的表格，这里只放两者共用的整理逻辑。
 type manageList struct {
 	title string
-	// items 从生效配置里整理出条目，顺序与 list 表一致。
+	// items 从按文件原样读的配置里整理出条目，顺序与 list 表一致，下标也与文件一致。
 	items func(env *configmgr.Env) []manageItem
 	// remove 删除第 index 条，返回描述被删条目的文字。
 	remove func(env *configmgr.Env, index int) (string, error)
