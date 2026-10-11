@@ -82,7 +82,7 @@ delete 拒绝删除仍被渠道引用的账号，并列出引用它的渠道与�
 func runAccounts(cmd *cobra.Command, opts *accountsOptions, interactive bool) error {
 	// 不是终端时与 accounts list 完全一致，脚本与管道拿到的是同一份输出。
 	if !interactive {
-		env, err := configmgr.LoadAccounts(opts.configPath)
+		env, err := configmgr.Load(opts.configPath)
 		if err != nil {
 			return err
 		}
@@ -265,16 +265,4 @@ func formatHeaderText(headers map[string]string) string {
 		pairs = append(pairs, name+"="+headers[name])
 	}
 	return strings.Join(pairs, ", ")
-}
-
-// accountsReloadableCheck 返回账号写回后的校验函数。
-//
-// 与 reloadableCheck 同一套，只是放行「顶层账号没有被任何渠道引用」：accounts create
-// 建出的账号在写回那一刻还没人引用，accounts edit 改的也往往是这种账号。
-// configedit 在校验失败时还原原文件。
-func accountsReloadableCheck(path string) func() error {
-	return func() error {
-		_, err := configmgr.LoadAccounts(path)
-		return err
-	}
 }

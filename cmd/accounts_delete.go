@@ -40,7 +40,7 @@ remove 是 delete 的别名，用法相同。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			env, err := configmgr.LoadAccounts(opts.configPath)
+			env, err := configmgr.Load(opts.configPath)
 			if err != nil {
 				return err
 			}
@@ -95,7 +95,7 @@ func removeAccountAt(env *configmgr.Env, index int) (string, error) {
 	if err := checkAccountRemovable(env.Config, account.Name); err != nil {
 		return "", err
 	}
-	if err := configedit.RemoveIndex(env.ConfigPath, []string{"accounts"}, index, accountsReloadableCheck(env.ConfigPath)); err != nil {
+	if err := configedit.RemoveIndex(env.ConfigPath, []string{"accounts"}, index, reloadableCheck(env.ConfigPath)); err != nil {
 		return "", err
 	}
 	return account.Name, nil

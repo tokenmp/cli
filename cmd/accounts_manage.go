@@ -41,7 +41,7 @@ func accountBrowseList() manageList {
 func runAccountsManage(cmd *cobra.Command, configPath string) error {
 	list := accountBrowseList()
 	for {
-		env, err := configmgr.LoadAccounts(configPath)
+		env, err := configmgr.Load(configPath)
 		if err != nil {
 			return err
 		}
@@ -205,7 +205,7 @@ func confirmAccountWrite(cmd *cobra.Command, path, title string, entry accountEn
 
 // applyAccountCreate 追加一个账号条目，校验与回滚与 accounts create 共用一套。
 func applyAccountCreate(env *configmgr.Env, entry accountEntry) error {
-	return configedit.AppendMapping(env.ConfigPath, []string{"accounts"}, entry, accountsReloadableCheck(env.ConfigPath))
+	return configedit.AppendMapping(env.ConfigPath, []string{"accounts"}, entry, reloadableCheck(env.ConfigPath))
 }
 
 // applyAccountEdit 按下标改写账号，只写与当前值不同的字段。
@@ -219,7 +219,7 @@ func applyAccountEdit(env *configmgr.Env, index int, entry accountEntry) error {
 	if len(fields) == 0 {
 		return nil
 	}
-	return configedit.SetSequenceFields(env.ConfigPath, []string{"accounts"}, index, fields, accountsReloadableCheck(env.ConfigPath))
+	return configedit.SetSequenceFields(env.ConfigPath, []string{"accounts"}, index, fields, reloadableCheck(env.ConfigPath))
 }
 
 // accountEditFields 比出编辑时要改的字段，只写变化的部分。

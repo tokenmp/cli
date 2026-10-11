@@ -97,7 +97,7 @@ func newChannelsCreateCmd(opts *channelsOptions) *cobra.Command {
 				return errors.New("引用账号需要一种使用凭据的鉴权方式，--auth-style 不能是 none")
 			}
 
-			env, err := configmgr.LoadAccounts(opts.configPath)
+			env, err := configmgr.Load(opts.configPath)
 			if err != nil {
 				return err
 			}

@@ -348,7 +348,7 @@ func TestImportWithAccountsReservesAccountKeyEnv(t *testing.T) {
 }
 
 // accountsSpareConfig 是 accounts 命令的沙箱：team-a 与 team-b 被 pool 引用，
-// spare 没有被任何渠道引用（core 会因此拒绝加载，accounts 命令按中间状态处理）。
+// spare 没有任何渠道引用。没人引用的账号不是错误，只是不参与展开。
 const accountsSpareConfig = `# 顶层账号沙箱配置
 listen: 127.0.0.1:9999
 
@@ -529,7 +529,7 @@ func TestAccountsCreateAppendsAndPreservesComments(t *testing.T) {
 		}
 	}
 
-	env, err := configmgr.LoadAccounts(path)
+	env, err := configmgr.Load(path)
 	if err != nil {
 		t.Fatalf("写完的配置读不回来: %v", err)
 	}
@@ -551,8 +551,27 @@ func TestAccountsCreateThenChannelReferencesLoads(t *testing.T) {
 	if out, err := run(t, "accounts", "create", "--name", "team-c", "--key-env", "TEAM_C_API_KEY", "--config", path); err != nil {
 		t.Fatalf("accounts create: %v\n%s", err, out)
 	}
-	if _, err := config.Load(path); err == nil {
-		t.Fatal("账号还没被引用时 core 应当拒绝加载")
+	// 先建账号、后接引用是自然顺序，中间那个「账号还没人引用」的状态也能加载：
+	// core 不再把它当错，因此两个读法都是严格的，不需要为准许中间状态开小口子。
+	env, err := configmgr.Load(path)
+	if err != nil {
+		t.Fatalf("账号还没被引用时也应当能加载: %v", err)
+	}
+	if _, ok := env.Config.ChannelByName("pool-c/team-c"); ok {
+		t.Error("还没接引用时不该展开出候选")
+	}
+	created := false
+	for _, account := range env.Config.Accounts {
+		if account.Name == "team-c" {
+			created = true
+			break
+		}
+	}
+	if !created {
+		t.Fatalf("文件里应当有刚建的 team-c: %+v", env.Config.Accounts)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("core 的严格加载不应当被这个状态挡住: %v", err)
 	}
 
 	if out, err := run(t, "channels", "create",
@@ -683,7 +702,7 @@ func TestAccountsDeleteUnreferencedSucceeds(t *testing.T) {
 		t.Errorf("spare 应当被删掉:\n%s", data)
 	}
 
-	env, err := configmgr.LoadAccounts(path)
+	env, err := configmgr.Load(path)
 	if err != nil {
 		t.Fatalf("删除后配置读不回来: %v", err)
 	}
@@ -801,7 +820,7 @@ func TestAccountsCreateFirstAccount(t *testing.T) {
 		t.Errorf("应当补出 accounts 段并写入新账号:\n%s", data)
 	}
 
-	env, err := configmgr.LoadAccounts(path)
+	env, err := configmgr.Load(path)
 	if err != nil {
 		t.Fatalf("写完的配置读不回来: %v", err)
 	}
@@ -863,7 +882,7 @@ func TestAccountEditFields(t *testing.T) {
 // TestManageAccountEditWrites 验证交互路径的编辑只写变化字段并保留注释。
 func TestManageAccountEditWrites(t *testing.T) {
 	path := configSandbox(t, accountsSpareConfig)
-	env, err := configmgr.LoadAccounts(path)
+	env, err := configmgr.Load(path)
 	if err != nil {
 		t.Fatalf("加载配置失败: %v", err)
 	}
@@ -890,7 +909,7 @@ func TestManageAccountEditWrites(t *testing.T) {
 // TestManageAccountDeleteRefusesReferenced 验证交互路径同样拒绝删除被引用的账号。
 func TestManageAccountDeleteRefusesReferenced(t *testing.T) {
 	path := configSandbox(t, accountsSpareConfig)
-	env, err := configmgr.LoadAccounts(path)
+	env, err := configmgr.Load(path)
 	if err != nil {
 		t.Fatalf("加载配置失败: %v", err)
 	}
@@ -909,7 +928,7 @@ func TestManageAccountDeleteRefusesReferenced(t *testing.T) {
 // TestManageAccountDeleteUnreferenced 验证交互路径能删掉没被引用的账号。
 func TestManageAccountDeleteUnreferenced(t *testing.T) {
 	path := configSandbox(t, accountsSpareConfig)
-	env, err := configmgr.LoadAccounts(path)
+	env, err := configmgr.Load(path)
 	if err != nil {
 		t.Fatalf("加载配置失败: %v", err)
 	}
@@ -928,7 +947,7 @@ func TestManageAccountDeleteUnreferenced(t *testing.T) {
 
 // TestManageAccountItemsMatchRows 验证交互条目与列表同序、字段齐全。
 func TestManageAccountItemsMatchRows(t *testing.T) {
-	env, err := configmgr.LoadAccounts(configSandbox(t, accountsSpareConfig))
+	env, err := configmgr.Load(configSandbox(t, accountsSpareConfig))
 	if err != nil {
 		t.Fatalf("加载配置失败: %v", err)
 	}

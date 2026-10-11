@@ -30,7 +30,7 @@ func newAccountsListCmd(opts *accountsOptions) *cobra.Command {
   tokenmp accounts list --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			env, err := configmgr.LoadAccounts(opts.configPath)
+			env, err := configmgr.Load(opts.configPath)
 			if err != nil {
 				return err
 			}

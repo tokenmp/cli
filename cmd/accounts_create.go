@@ -56,7 +56,7 @@ channels create --accounts 接上引用之后即可加载。`,
 				return err
 			}
 
-			env, err := configmgr.LoadAccounts(opts.configPath)
+			env, err := configmgr.Load(opts.configPath)
 			if err != nil {
 				return err
 			}
@@ -70,7 +70,7 @@ channels create --accounts 接上引用之后即可加载。`,
 				return printAccountEntry(cmd, env.ConfigPath, "将要追加的账号", entry)
 			}
 
-			if err := configedit.AppendMapping(env.ConfigPath, []string{"accounts"}, entry, accountsReloadableCheck(env.ConfigPath)); err != nil {
+			if err := configedit.AppendMapping(env.ConfigPath, []string{"accounts"}, entry, reloadableCheck(env.ConfigPath)); err != nil {
 				return err
 			}
 
