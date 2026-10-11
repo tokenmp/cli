@@ -457,6 +457,57 @@ func TestModelsListPlaceholderAndAffinity(t *testing.T) {
 	}
 }
 
+// poolConfig 用来验证试算里的亲和说明。组名取第一条带组名的候选，同组候选组成
+// 一个池，池里不足两条时运行时不会重排，试算也就不该加说明。
+const poolConfig = `listen: 127.0.0.1:9999
+
+channels:
+  - {name: account-a, dialect: openai, base_url: "https://api.example.com/v1", path: /chat/completions, auth: {style: none}}
+  - {name: account-b, dialect: openai, base_url: "https://api.example.com/v1", path: /chat/completions, auth: {style: none}}
+
+models:
+  - {match: "shared-*", channel: account-a, affinity: accounts}
+  - {match: "shared-*", channel: account-b, affinity: accounts}
+  - {match: "solo-*", channel: account-a, affinity: accounts}
+  - {match: "mixed-*", channel: account-a, affinity: solo}
+  - {match: "mixed-*", channel: account-b, affinity: accounts}
+  - {match: "mixed-*", channel: account-a, affinity: accounts}
+  - {match: "plain-*", channel: account-a}
+`
+
+func TestModelsListAffinityNote(t *testing.T) {
+	path := configSandbox(t, poolConfig)
+
+	trial := func(model string) string {
+		t.Helper()
+		out, err := run(t, "models", "list", "--config", path, "--model", model)
+		if err != nil {
+			t.Fatalf("models list --model %s: %v\n%s", model, err, out)
+		}
+		return out
+	}
+
+	// 池里两条：运行时会按会话标识重排，试算要说清上表是配置顺序。
+	if out := trial("shared-x"); !strings.Contains(out, "亲和组 accounts 的 2 条候选在运行时按会话标识重排") {
+		t.Errorf("池里两条时应当加一句说明:\n%s", out)
+	}
+
+	// 池里只有一条：亲和没有可分配的对象，运行时不重排，不加说明。
+	if out := trial("solo-x"); strings.Contains(out, "重排") {
+		t.Errorf("池里一条时不该加说明:\n%s", out)
+	}
+
+	// 两个组名时只有排在最前的那一组组成池。这里它只有一条，因此不加说明。
+	if out := trial("mixed-x"); strings.Contains(out, "重排") {
+		t.Errorf("只认排在最前的组，它只有一条时不该加说明:\n%s", out)
+	}
+
+	// 一条候选都没写亲和时，输出与没有这个功能时一样。
+	if out := trial("plain-x"); strings.Contains(out, "重排") {
+		t.Errorf("没写亲和时不该加说明:\n%s", out)
+	}
+}
+
 func TestConfigPath(t *testing.T) {
 	path := configSandbox(t, validConfig)
 
