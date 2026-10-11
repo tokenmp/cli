@@ -36,14 +36,15 @@ list 只报告凭据所在的环境变量有没有设置，不读也不打印它
 create 追加前按渠道规则校验，base_url 带了路径却没给 path 这类问题在这里就拦下。
 delete 拒绝删除仍被 models 段引用的渠道，并列出引用它的规则。
 
-不带子命令时进入交互界面：
+不带子命令时进入分步管理：先打印与 list 相同的表格，再问做什么。
 
-- ↑/↓ 或 j/k 移动，PgUp/PgDn 翻页，Home/End 跳到首尾
-- d 删除选中渠道，删除前确认，被模型规则引用时拒绝并指出是哪几条
-- q 或 Ctrl-C 退出
+- 先选新建、编辑、删除或退出；编辑与删除还要从列表里选一条
+- 选一项后一个字段一个问题地问下去，编辑时每个字段的默认值是当前值，回车即保留
+- 每次只写变化过的字段，写回前打印将要写入的条目并再确认一次
+- Esc 或 Ctrl-C 中断当前这件，回到菜单；在菜单上中断则退出，两种情况下都不落盘
+- 删除仍被 models 段引用的渠道会被拒绝，并列出引用它的规则
 
-输出不是终端时打印与 channels list 相同的表格，不做交互。--json 只在非终端时生效，
-进交互时报错。
+输出不是终端时打印与 channels list 相同的表格，不做交互。--json 只在非终端时生效，进交互时报错。
 
 凭据一律只写环境变量名，配置文件里不出现密钥。`,
 		Example: `  # 看现有渠道与凭据状态
@@ -92,7 +93,7 @@ func runChannels(cmd *cobra.Command, opts *channelsOptions, interactive bool) er
 	if opts.jsonOut {
 		return errors.New("--json 与交互模式不能同时使用：去掉 --json，或把输出重定向到文件")
 	}
-	return runBrowse(cmd, channelBrowseList(opts.configPath))
+	return runChannelsManage(cmd, opts.configPath)
 }
 
 // channelRow 是一个渠道的一行摘要，也是 --json 的输出形状。

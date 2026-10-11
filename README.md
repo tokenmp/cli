@@ -263,10 +263,24 @@ $ tokenmp config show
 
 `list` 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。缺凭据的渠道会在表下列出。
 
-`tokenmp channels` 不带子命令时进入交互界面。↑/↓ 或 j/k 移动，PgUp/PgDn 翻页，
-Home/End 跳到首尾，选中行下方显示九个字段的详情，按 d 删除并确认，按 q 或 Ctrl-C 退出。
-删除仍被 `models` 段引用的渠道会被拒绝，并在状态栏里指出是哪几条规则。
-界面上只改内存里的列表，删除成功才写回配置，写回保留注释与缩进，取消或直接退出都不会动文件。
+`tokenmp channels` 不带子命令时进入分步管理。它先打印与 `channels list` 相同的表格，
+再问要做什么：新建、编辑、删除或退出。选编辑或删除时，还要从列表里挑一条。
+
+选好动作后，一个字段一个问题地问下去。顺序是渠道名、方言、基址、路径、鉴权方式、
+凭据环境变量名、自定义请求头或查询参数名、超时、最大重试次数。
+编辑时每个字段的默认值是当前值，回车即保留。
+鉴权方式为 `none` 时跳过凭据，`bearer` 与 `x-api-key` 只问环境变量名，
+`custom` 问请求头名，`query` 问查询参数名。
+
+每个字段当场校验：渠道名不能为空，基址要以 `http://` 或 `https://` 开头，
+超时按 `time.ParseDuration` 的写法解析，最大重试次数在 0 到 10 之间，
+鉴权方式与参数要对得上。全部问完后打印将要写入的条目，再确认一次才落盘。
+写回只改变化过的字段，已有的注释与缩进保留，写回后配置不合法会自动还原。
+
+删除仍被 `models` 段引用的渠道会被拒绝，并列出引用它的规则；被引用的渠道也不能改名。
+做完一件回到菜单，可以接着做下一件，选退出才结束。
+在字段表单里按 Esc 或 Ctrl-C 取消当前这件并回到菜单，在动作菜单里按则直接退出，
+两种情况都不改文件。
 
 输出不是终端时，`tokenmp channels` 打印与 `channels list` 相同的表格，不做交互。
 `--json` 与交互互斥：管道里给 `--json` 输出 JSON，与 `channels list --json` 相同；
@@ -301,9 +315,19 @@ $ tokenmp channels list
 
 规则没有名字，`list` 表里的序号是规则在 `models` 段里的下标，与 `config get models.0` 的口径一致，`delete` 收这个序号。按内容删时给 `match` 的原样写法，规则有多条时用 `--channel` 指定其中一条；删除后打印删掉的那条的匹配式与渠道。`create` 引用了不存在的渠道时报错，同一条 `match` 与 `channel` 组合重复时报错，不覆盖。
 
-`tokenmp models` 不带子命令时同样进入交互界面。列表列与 `models list` 一致，
-选中行下方显示规则的五个字段，按 d 删除并确认，按 q 或 Ctrl-C 退出。
-界面上只改内存里的列表，删除成功才写回配置，取消或直接退出都不会动文件。
+`tokenmp models` 不带子命令时同样进入分步管理。它先打印与 `models list` 相同的规则表，
+再问要做什么：新建、编辑、删除或退出。
+
+规则按 match、channel、upstream、dialect、affinity 的顺序一个字段一个问题地问。
+channel 只能从配置里已有的渠道里选；match 用 core 的匹配式校验，必须非空；
+upstream 只认 `${model}` 占位符；dialect 的第一项是留空，表示用渠道方言。
+编辑时默认值是当前值，回车即保留。全部问完后打印将要写入的条目，再确认一次才落盘。
+写回只改变化过的字段，注释与缩进保留。
+
+没有渠道时命令会提示先建渠道；同一条 match 与 channel 组合重复时会拒绝。
+做完一件回到菜单，可以接着做下一件，选退出才结束。
+在字段表单里按 Esc 或 Ctrl-C 取消当前这件并回到菜单，在动作菜单里按则直接退出，
+两种情况都不改文件。
 
 输出不是终端时，`tokenmp models` 打印与 `models list` 相同的规则表。
 `--json` 与交互互斥：管道里给 `--json` 输出 JSON，与 `models list --json` 相同；
@@ -548,7 +572,9 @@ make clean
 | [cmd/channels_list.go](cmd/channels_list.go) | 渠道表与凭据状态 |
 | [cmd/channels_create.go](cmd/channels_create.go) | 追加渠道并校验 |
 | [cmd/channels_delete.go](cmd/channels_delete.go) | 删除渠道，拒绝删除被引用的渠道 |
-| [cmd/browse.go](cmd/browse.go) | 交互式浏览与删除的界面模型，channels 与 models 共用 |
+| [cmd/manage.go](cmd/manage.go) | 分步管理的共用流程：动作菜单、选条目与确认 |
+| [cmd/channels_manage.go](cmd/channels_manage.go) | 渠道的分步新建、编辑与删除 |
+| [cmd/models_manage.go](cmd/models_manage.go) | 模型规则的分步新建、编辑与删除 |
 | [cmd/models.go](cmd/models.go) | `models` 命令组与规则整理的共用逻辑 |
 | [cmd/models_list.go](cmd/models_list.go) | 路由规则表与选路试算 |
 | [cmd/models_create.go](cmd/models_create.go) | 追加路由规则 |
@@ -560,7 +586,7 @@ make clean
 | [cmd/errors.go](cmd/errors.go) | 错误渲染，去掉了英文句点与首词大写 |
 | [internal/pluginmgr](internal/pluginmgr/env.go) | 配置、插件目录与宿主的装配 |
 | [internal/configmgr](internal/configmgr/configmgr.go) | 配置的加载、路径取值与标量改写 |
-| [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写与校验回滚 |
+| [internal/configedit](internal/configedit/configedit.go) | 保留注释的配置改写与校验回滚，含序列条目字段改写 |
 | [internal/highlight](internal/highlight/highlight.go) | 配置文本的语法高亮，主题按终端明暗选 |
 | [internal/logging](internal/logging/logging.go) | 按配置里的 log 段构造服务日志 |
 | [internal/media](internal/media/media.go) | 媒体解析回调，目前只解析 data URL |
