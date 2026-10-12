@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// recordsSection 是追加到 runnableConfig 后面的 records 段。
+// recordsSection 是追加到 runnableConfig 后面的 records 段。endpoint 传完整地址，
+// 校验端点由 records.Config.AuthURL 从它推出（把结尾的 /records 换成 /api-key）。
 const recordsSection = `
 records:
   endpoint: "%s"
@@ -20,6 +21,12 @@ records:
   batch_size: 10
   flush_interval: 5s
 `
+
+// 内部端点的路径。web 的两个端点路径固定，测试里按路径分流。
+const (
+	recordsPath = "/api/internal/records"
+	apiKeyPath  = "/api/internal/api-key"
+)
 
 // upstreamWithUsage 是一个返回带用量响应的假上游。
 func upstreamWithUsage(t *testing.T) *httptest.Server {
@@ -63,6 +70,13 @@ func TestRunPushesCallRecords(t *testing.T) {
 	}
 	received := make(chan batch, 4)
 	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == apiKeyPath {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"ok":true,"data":{"user_id":263,"api_key_id":42,`+
+				`"model_whitelist":null,"rate_limit_per_min":60,"expires_at":null,`+
+				`"pricing":{"plan_id":3,"pricing_mode":"markup","markup_multiplier":1.15,"prices":[]}}}`)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		var payload batch
 		_ = json.Unmarshal(body, &payload)
@@ -74,13 +88,19 @@ func TestRunPushesCallRecords(t *testing.T) {
 	t.Cleanup(hook.Close)
 
 	upstream := upstreamWithUsage(t)
-	path := configSandbox(t, fmt.Sprintf(runnableConfig, "openai", upstream.URL)+fmt.Sprintf(recordsSection, hook.URL))
+	path := configSandbox(t, fmt.Sprintf(runnableConfig, "openai", upstream.URL)+fmt.Sprintf(recordsSection, hook.URL+recordsPath))
 
 	address, out, done, cancel := startRun(t, path)
 	defer cancel()
 
-	response, err := http.Post("http://"+address+"/v1/messages", "application/json",
+	request, err := http.NewRequest(http.MethodPost, "http://"+address+"/v1/messages",
 		strings.NewReader(`{"model":"gpt-4o","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v\n%s", err, out)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer sk-live")
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("转发请求失败: %v\n%s", err, out)
 	}
@@ -144,12 +164,15 @@ func TestRunPushesCallRecords(t *testing.T) {
 	if row.PromptTokens == nil || *row.PromptTokens != 10 {
 		t.Errorf("prompt_tokens 是 %v，期望 10", row.PromptTokens)
 	}
-	// billing 数组现在不发；身份两列现在没有来源，留在库里为空。
+	// billing 数组现在不发；身份两列现在由密钥校验认出来。
 	if strings.Contains(got.Raw, "billing") {
 		t.Errorf("现在不该发 billing 数组: %s", got.Raw)
 	}
-	if strings.Contains(got.Raw, "user_id") || strings.Contains(got.Raw, "api_key_id") {
-		t.Errorf("身份两列现在应当留空: %s", got.Raw)
+	if row.UserID == nil || *row.UserID != 263 {
+		t.Errorf("user_id 是 %v，期望 263: %s", row.UserID, got.Raw)
+	}
+	if row.APIKeyID == nil || *row.APIKeyID != 42 {
+		t.Errorf("api_key_id 是 %v，期望 42: %s", row.APIKeyID, got.Raw)
 	}
 }
 
@@ -166,20 +189,36 @@ func TestRunRecordsEndpointDownStillForwards(t *testing.T) {
 	closed.Close()
 
 	upstream := upstreamWithUsage(t)
+	// 校验端点单独起一个还活着的：这条用例考的是「摄入端点不通不影响转发」，不是
+	// 「校验端点不通」——后者是 fail_closed 的事，另有断言。
+	lookup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true,"data":{"user_id":1,"api_key_id":2,`+
+			`"model_whitelist":null,"rate_limit_per_min":null,"expires_at":null,"pricing":{}}}`)
+	}))
+	t.Cleanup(lookup.Close)
+
 	section := `
 records:
   endpoint: "%s"
+  auth_endpoint: "%s/api/internal/api-key"
   secret_env: "TOKENMP_RECORDS_SECRET"
   batch_size: 1
   flush_interval: 1s
 `
-	path := configSandbox(t, fmt.Sprintf(runnableConfig, "openai", upstream.URL)+fmt.Sprintf(section, closed.URL))
+	path := configSandbox(t, fmt.Sprintf(runnableConfig, "openai", upstream.URL)+fmt.Sprintf(section, closed.URL, lookup.URL))
 
 	address, out, done, cancel := startRun(t, path)
 	defer cancel()
 
-	response, err := http.Post("http://"+address+"/v1/messages", "application/json",
+	request, err := http.NewRequest(http.MethodPost, "http://"+address+"/v1/messages",
 		strings.NewReader(`{"model":"gpt-4o","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v\n%s", err, out)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer sk-live")
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("端点不通时转发失败: %v\n%s", err, out)
 	}
@@ -213,6 +252,96 @@ func TestRunRecordsMissingSecret(t *testing.T) {
 	}
 }
 
+// TestRunRejectsBadKeyAndSkipsRecord 无效密钥被校验端点拒绝，且不写记录：不知道是
+// 谁、也没有上游渠道，写进去只会污染全站视图的统计。
+func TestRunRejectsBadKeyAndSkipsRecord(t *testing.T) {
+	t.Setenv("TOKENMP_RECORDS_SECRET", "test-secret")
+
+	received := make(chan string, 4)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == apiKeyPath {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"error":"密钥不存在"}`)
+			return
+		}
+		received <- r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(hook.Close)
+
+	upstream := upstreamWithUsage(t)
+	path := configSandbox(t, fmt.Sprintf(runnableConfig, "openai", upstream.URL)+fmt.Sprintf(recordsSection, hook.URL+recordsPath))
+
+	address, out, done, cancel := startRun(t, path)
+	defer cancel()
+
+	request, err := http.NewRequest(http.MethodPost, "http://"+address+"/v1/messages",
+		strings.NewReader(`{"model":"gpt-4o","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v\n%s", err, out)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer sk-bad")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("请求失败: %v\n%s", err, out)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("未知密钥应当回 404，实际 %d\n%s", response.StatusCode, out)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("退出时报错: %v\n%s", err, out)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("取消之后服务没有退出")
+	}
+
+	select {
+	case path := <-received:
+		t.Fatalf("被密钥拦下的请求不该写记录，却收到了 %s", path)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestRunRejectsMissingKey auth 开启时不带密钥的请求回 401。
+func TestRunRejectsMissingKey(t *testing.T) {
+	t.Setenv("TOKENMP_RECORDS_SECRET", "test-secret")
+
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(hook.Close)
+
+	upstream := upstreamWithUsage(t)
+	path := configSandbox(t, fmt.Sprintf(runnableConfig, "openai", upstream.URL)+fmt.Sprintf(recordsSection, hook.URL+recordsPath))
+
+	address, out, done, cancel := startRun(t, path)
+	defer cancel()
+
+	response, err := http.Post("http://"+address+"/v1/messages", "application/json",
+		strings.NewReader(`{"model":"gpt-4o","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("请求失败: %v\n%s", err, out)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("不带密钥应当回 401，实际 %d\n%s", response.StatusCode, out)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("取消之后服务没有退出")
+	}
+}
+
 // TestRunRecordsDryRunShowsEndpoint dry-run 只预检，启动信息里带出记录推送的地址。
 func TestRunRecordsDryRunShowsEndpoint(t *testing.T) {
 	t.Setenv("TOKENMP_RECORDS_SECRET", "test-secret")
@@ -225,6 +354,9 @@ func TestRunRecordsDryRunShowsEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(out, "记录推送") || !strings.Contains(out, "127.0.0.1:6789") {
 		t.Errorf("启动信息里应当报出记录推送地址:\n%s", out)
+	}
+	if !strings.Contains(out, "密钥校验") || !strings.Contains(out, "127.0.0.1:6789/api/internal/api-key") {
+		t.Errorf("启动信息里应当报出校验端点:\n%s", out)
 	}
 }
 
@@ -245,4 +377,6 @@ type recordsRow struct {
 	PromptTokens *int     `json:"prompt_tokens"`
 	TotalTokens  *int     `json:"total_tokens"`
 	TPS          *float64 `json:"tps"`
+	UserID       *int64   `json:"user_id"`
+	APIKeyID     *int64   `json:"api_key_id"`
 }

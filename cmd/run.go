@@ -12,6 +12,7 @@ import (
 	"github.com/tokenmp/core/dialect"
 	"github.com/tokenmp/core/server"
 
+	"github.com/tokenmp/cli/internal/clientauth"
 	"github.com/tokenmp/cli/internal/configmgr"
 	"github.com/tokenmp/cli/internal/logging"
 	"github.com/tokenmp/cli/internal/media"
@@ -58,6 +59,11 @@ tps。tps 的分母是生成时长（总时长减 ttft），预填充与排队�
 配置里写了 records 段时，每个请求结束还会把这条账目推给 web 的摄入端点：内存里攒批，
 攒够一批或到兜底间隔就发，发失败按退避重试，不挡转发。队列有上限，满了丢最旧的一条
 并记 WARN；Ctrl-C 之后先把队列里剩下的发完。端点不通只影响推送，不影响转发。
+
+同一个 records 段还会在转发之前认调用方：按方言取客户端密钥，调 web 的校验端点换成
+身份，填进记录的 user_id 与 api_key_id。校验结果按密钥的 sha256 缓存，缓存周期由
+cache_ttl 定。校验不通过、或校验端点不通且 fail_closed 为真时，请求在中间件里被拒，
+不进转发链路，也不写记录。
 
 服务提供的端点：
  - /v1/chat/completions，OpenAI Chat
@@ -115,17 +121,29 @@ type assembly struct {
 	Service *server.Server
 }
 
+// clientAuthOn 与 clientAuthOff 是传给 assemble 的取值，说明要不要装客户端密钥校验
+// 中间件。run 装，test 不装：test 在进程内发一条本机请求，没有客户端密钥可带，它
+// 考的是上游转发链路，不是客户端鉴权。
+const (
+	clientAuthOn  = true
+	clientAuthOff = false
+)
+
 // assemble 按配置装配服务：加载并校验配置、按 log 段构造日志、注册媒体解析、
 // 构造服务并挂上请求结束回调。run 与 test 共用这一条流程。
 //
 // newLogs 按配置里的 log 段构造日志。两个命令对 core 日志的级别要求不同：run 用
 // 配置里的级别，test 默认压到 warn。onDone 在每次请求结束时调用，拿到本次装配的
 // 日志入口与 core 交出的原始量；run 用它写账目行，test 用它收集结果。
+//
+// withClientAuth 为真且 records 段配了端点时，装配客户端密钥校验中间件：认不出身份
+// 的请求被拦下，认出来的身份由 onDone 从 context 里取。
 func assemble(
 	configPath string,
 	stderr io.Writer,
 	newLogs func(config.Log, io.Writer) logging.Loggers,
-	onDone func(logging.Loggers, server.Outcome),
+	onDone func(context.Context, logging.Loggers, server.Outcome),
+	withClientAuth bool,
 ) (*assembly, error) {
 	// 装配面向运行时：顶层账号展开之后的渠道与规则才是服务实际会用的那份。
 	env, err := configmgr.LoadExpanded(configPath)
@@ -137,9 +155,27 @@ func assemble(
 	// 媒体解析是进程级设置，启动阶段注册一次。
 	media.Register()
 
-	service, err := server.FromConfigWith(cfg, logs.Core, server.WithRequestDone(func(_ context.Context, outcome server.Outcome) {
-		onDone(logs, outcome)
-	}))
+	options := []server.Option{
+		server.WithRequestDone(func(ctx context.Context, outcome server.Outcome) {
+			onDone(ctx, logs, outcome)
+		}),
+	}
+	if withClientAuth && env.Records.Enabled() {
+		// 校验端点的共享密钥与记录摄入同一把，启动时读一次，缺值就退出。
+		secret, err := env.Records.SecretFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		authorizer := clientauth.New(clientauth.Options{
+			Endpoint:   env.Records.AuthURL(),
+			Secret:     secret,
+			CacheTTL:   env.Records.CacheTTL.Duration(),
+			FailClosed: env.Records.FailClosedEnabled(),
+		}, logs.Own)
+		options = append(options, server.WithMiddleware(authorizer.Middleware))
+	}
+
+	service, err := server.FromConfigWith(cfg, logs.Core, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -159,19 +195,27 @@ func runServer(cmd *cobra.Command, opts runOptions) error {
 	// 两边各拿各的字段，不重复解析。sender 要等配置加载完才知道要不要建，因此先在
 	// 闭包里捕获变量，装配之后再赋值。
 	var sender *records.Sender
-	onDone := func(logs logging.Loggers, outcome server.Outcome) {
+	onDone := func(ctx context.Context, logs logging.Loggers, outcome server.Outcome) {
 		logOutcome(logs, outcome)
 		if sender == nil {
 			return
 		}
 		// 只推四种方言入口的调用。/healthz、/v1/models 与未知路径也会走 OnRequestDone，
 		// 但它们不是模型调用，进请求日志只会变成噪声。
-		if row := records.FromOutcome(outcome, time.Now()); row.Entry != "" {
-			sender.Add(row)
+		row := records.FromOutcome(outcome, time.Now())
+		if row.Entry == "" {
+			return
 		}
+		// 身份由密钥校验中间件放进 context。fail_closed 为假而端点不通时放行的请求
+		// 没有身份，两列留空。
+		if identity, ok := clientauth.FromContext(ctx); ok {
+			row.UserID = &identity.UserID
+			row.APIKeyID = &identity.APIKeyID
+		}
+		sender.Add(row)
 	}
 
-	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), logging.New, onDone)
+	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), logging.New, onDone, clientAuthOn)
 	if err != nil {
 		return err
 	}
@@ -229,7 +273,10 @@ func printRunSummary(w io.Writer, env *configmgr.Env, cfg *config.Config, addres
 		{"插件目录", pluginDirText(plugins)},
 	}
 	if env.Records.Enabled() {
-		fields = append(fields, [2]string{"记录推送", env.Records.Endpoint})
+		fields = append(fields,
+			[2]string{"记录推送", env.Records.Endpoint},
+			[2]string{"密钥校验", env.Records.AuthURL()},
+		)
 	}
 	fields = append(fields, [2]string{"端点", endpointList()})
 

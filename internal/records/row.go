@@ -55,9 +55,9 @@ type Row struct {
 	FinishedAt       time.Time `json:"finished_at"`
 	CreatedAt        time.Time `json:"created_at"`
 
-	// UserID 与 APIKeyID 恒为空：Outcome 里没有身份，内核现在也不做客户端密钥鉴权
-	// （config 里的 auth 是上游渠道的凭据）。等 web 侧给出密钥校验端点、或内核直接
-	// 读 web 的库之后再填。
+	// UserID 与 APIKeyID 是 internal/clientauth 认出的调用方身份。核验没通过或校验
+	// 端点不可用时按配置放行的请求不会走到这里：前者被中间件拦下、不写记录，后者
+	// 认不出身份，两列为空。
 	UserID   *int64 `json:"user_id,omitempty"`
 	APIKeyID *int64 `json:"api_key_id,omitempty"`
 

@@ -198,14 +198,14 @@ func runTest(cmd *cobra.Command, opts testOptions) error {
 	}
 
 	outcomes := make(chan server.Outcome, 1)
-	collect := func(_ logging.Loggers, outcome server.Outcome) {
+	collect := func(_ context.Context, _ logging.Loggers, outcome server.Outcome) {
 		// 只关心第一条：整条命令只发一条测试请求。
 		select {
 		case outcomes <- outcome:
 		default:
 		}
 	}
-	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), testLoggers(opts.verbose), collect)
+	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), testLoggers(opts.verbose), collect, clientAuthOff)
 	if err != nil {
 		return err
 	}
