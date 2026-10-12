@@ -22,6 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/tokenmp/cli/internal/configedit"
+	"github.com/tokenmp/cli/internal/records"
 )
 
 // SettablePaths 是配置里可能还没有、但允许补上的标量路径。已经存在的标量都能改，
@@ -37,10 +38,26 @@ type Env struct {
 	ConfigPath string
 	// Config 是加载后的配置。配置文件不存在时是只剩默认值的空配置。
 	Config *config.Config
+	// Records 是 records 段，整段没写时为 nil。它不是 core 的配置字段，由这层接住，
+	// 见 fileConfig。
+	Records *records.Config
 	// HasConfig 报告配置文件是否存在。
 	HasConfig bool
 	// Dir 是配置文件所在目录，插件目录等相对路径以它为基准。
 	Dir string
+}
+
+// fileConfig 在 core 的配置模型之外多带一个 cli 自己的 records 段。
+//
+// records 是 cli 侧的概念：把每次调用推给 web 的摄入端点，core 不认识它。而解码开着
+// KnownFields，直接把文件解进 core.Config 会因为多出这个键而报错，因此用一层内联
+// 包装把它接住，core 的那部分照旧走 config.Config 的方法与校验。
+//
+// Records 用指针：nil 表示整段没写，config show 里也就不出现 records；写了才出现，
+// 并带上填好的默认值。
+type fileConfig struct {
+	config.Config `yaml:",inline"`
+	Records       *records.Config `yaml:"records,omitempty"`
 }
 
 // Open 读取并校验配置。配置文件不存在不算错误：只看目录的命令不必先有配置。
@@ -82,8 +99,8 @@ func LoadExpanded(configPath string) (*Env, error) {
 }
 
 // openWith 走完「读配置、定位目录、补相对路径」的公共流程。inspect 决定读哪一份形态。
-func openWith(configPath string, inspect func(string) (*config.Config, bool, error)) (*Env, error) {
-	cfg, hasConfig, err := inspect(configPath)
+func openWith(configPath string, inspect func(string) (*config.Config, *records.Config, bool, error)) (*Env, error) {
+	cfg, rec, hasConfig, err := inspect(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +116,7 @@ func openWith(configPath string, inspect func(string) (*config.Config, bool, err
 	return &Env{
 		ConfigPath: absolute,
 		Config:     cfg,
+		Records:    rec,
 		HasConfig:  hasConfig,
 		Dir:        filepath.Dir(absolute),
 	}, nil
@@ -110,33 +128,46 @@ func openWith(configPath string, inspect func(string) (*config.Config, bool, err
 // 给出。配置文件不存在时返回一份只剩默认值的空配置与假值，不算错误。
 //
 // 返回的是按文件原样解析的形态，路径与下标口径与 config get 一致。
-func Inspect(configPath string) (*config.Config, bool, error) {
-	cfg, err := parseConfigFile(configPath)
+func Inspect(configPath string) (*config.Config, *records.Config, bool, error) {
+	cfg, rec, err := parseConfigFile(configPath)
 	switch {
 	case err == nil:
-		return cfg, true, nil
+		return cfg, rec, true, nil
 	case errors.Is(err, fs.ErrNotExist):
 		empty := &config.Config{}
 		empty.Defaults()
-		return empty, false, nil
+		return empty, nil, false, nil
 	default:
-		return nil, true, err
+		return nil, nil, true, err
 	}
 }
 
-// inspectExpanded 与 Inspect 同理，只是在返回之前按 core 的 Parse 展开顶层账号。
-func inspectExpanded(configPath string) (*config.Config, bool, error) {
-	cfg, err := config.Load(configPath)
+// inspectExpanded 与 Inspect 同理，只是在返回之前展开顶层账号。
+//
+// 它不走 core 的 config.Load：那份的解码认不出 records 段。这里复用 parseConfigFile
+// 自己拼的那一份，再调一次 Expand，结果与 core.Load 一致，差异由 configmgr 的
+// 防回归测试盯着。
+func inspectExpanded(configPath string) (*config.Config, *records.Config, bool, error) {
+	cfg, rec, err := parseConfigFile(configPath)
 	switch {
 	case err == nil:
-		return cfg, true, nil
+		return cfg.Expand(), rec, true, nil
 	case errors.Is(err, fs.ErrNotExist):
 		empty := &config.Config{}
 		empty.Defaults()
-		return empty, false, nil
+		return empty, nil, false, nil
 	default:
-		return nil, true, err
+		return nil, nil, true, err
 	}
+}
+
+// Validate 重新读取并校验配置文件，供写回之后的校验用。
+//
+// 它认得 cli 自己的 records 段，因此不能用 core 的 config.Load 代替：那份的解码会把
+// records 当成拼错的字段。
+func Validate(path string) error {
+	_, _, err := parseConfigFile(path)
+	return err
 }
 
 // parseConfigFile 按配置文件里的原样解析：顶层 accounts 与渠道的 auth.accounts 都
@@ -148,40 +179,56 @@ func inspectExpanded(configPath string) (*config.Config, bool, error) {
 //
 // 展开之后的形态也校验一次：展开名与手写渠道名撞车这类问题只在平铺形态里出现，
 // 少这一步会漏掉；core 的 Parse 同样校验两次。
-func parseConfigFile(path string) (*config.Config, error) {
+func parseConfigFile(path string) (*config.Config, *records.Config, error) {
 	//nolint:gosec // 路径来自调用方：配置文件位置由使用者给出。
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = file.Close() }()
 
-	var cfg config.Config
+	var raw fileConfig
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
-	if err := decoder.Decode(&cfg); err != nil {
+	if err := decoder.Decode(&raw); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("配置文件为空")
+			return nil, nil, errors.New("配置文件为空")
 		}
-		return nil, err
+		return nil, nil, err
 	}
+	cfg := &raw.Config
 	cfg.Defaults()
 	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if raw.Records != nil {
+		raw.Records.Defaults()
+		if err := raw.Records.Validate(); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := cfg.Expand().Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("解析配置文件路径失败: %w", err)
+		return nil, nil, fmt.Errorf("解析配置文件路径失败: %w", err)
 	}
 	cfg.Path = absolute
 	if cfg.Plugins.Dir != "" && !filepath.IsAbs(cfg.Plugins.Dir) {
 		cfg.Plugins.Dir = filepath.Join(filepath.Dir(absolute), cfg.Plugins.Dir)
 	}
-	return &cfg, nil
+	return cfg, raw.Records, nil
+}
+
+// document 把 core 的配置与 cli 自己的 records 段拼回与配置文件同形的值。
+func (e *Env) document() fileConfig {
+	document := fileConfig{Records: e.Records}
+	if e.Config != nil {
+		document.Config = *e.Config
+	}
+	return document
 }
 
 // Generic 把配置还原成与配置文件同形的通用值，字段名沿用 yaml 标签。
@@ -189,7 +236,7 @@ func parseConfigFile(path string) (*config.Config, error) {
 // core 的配置结构体只有 yaml 标签，直接编码成 JSON 会得到 Go 字段名，因此先过一遍
 // YAML：这样 --json 输出与 config get 的路径都与配置文件一一对应。
 func (e *Env) Generic() (map[string]any, error) {
-	encoded, err := yaml.Marshal(e.Config)
+	encoded, err := yaml.Marshal(e.document())
 	if err != nil {
 		return nil, fmt.Errorf("编码配置失败: %w", err)
 	}
@@ -222,7 +269,7 @@ func (e *Env) Pruned() (map[string]any, error) {
 // 字段会按名称排序。
 func (e *Env) PrunedYAML() ([]byte, error) {
 	var document yaml.Node
-	if err := document.Encode(e.Config); err != nil {
+	if err := document.Encode(e.document()); err != nil {
 		return nil, fmt.Errorf("编码配置失败: %w", err)
 	}
 	// Node.Encode 把节点本身设成值对应的节点，不包一层文档节点；保险起见两种情况
@@ -329,8 +376,7 @@ func (e *Env) Set(path, value string) error {
 	}
 
 	return configedit.SetScalar(e.ConfigPath, strings.Split(path, "."), value, func() error {
-		_, err := config.Load(e.ConfigPath)
-		return err
+		return Validate(e.ConfigPath)
 	})
 }
 

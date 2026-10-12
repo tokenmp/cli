@@ -257,7 +257,6 @@ func marshalEntry(value any) ([]byte, error) {
 // configedit 负责还原原文件。channels 与 models 两个命令组共用这一套。
 func reloadableCheck(path string) func() error {
 	return func() error {
-		_, err := config.Load(path)
-		return err
+		return configmgr.Validate(path)
 	}
 }

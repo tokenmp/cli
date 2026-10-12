@@ -111,6 +111,34 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 跨协议转换遇到 data URL 形式的图片时能自己解析，带 `;base64` 与百分号编码两种写法
 都认。按 URL 取回图片内容的能力还没有实现，这类请求会明确报错，不会静默丢掉图片。
 
+### 调用记录推送
+
+配置里写了 `records` 段时，`tokenmp run` 会把每次调用推给 web 的摄入端点。不写这一段就不推送，`run` 的行为与没有它时一样。
+
+```yaml
+records:
+  endpoint: "http://127.0.0.1:6789/api/internal/records"
+  secret_env: "RECORDS_CALLBACK_SECRET"
+  batch_size: 200
+  flush_interval: 5s
+```
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `endpoint` | 必填 | 摄入端点地址 |
+| `secret_env` | 必填 | 共享密钥所在的环境变量名 |
+| `batch_size` | `200` | 一批最多的行数 |
+| `flush_interval` | `5s` | 攒不满一批时的兜底发送间隔 |
+
+密钥值只从 `secret_env` 指的环境变量读，变量没设置时启动就报错，与渠道凭据同一规矩。请求带 `x-callback-secret` 请求头。
+
+推送接在写账目行的同一处 `OnRequestDone` 上，两边共用 core 交出的同一份原始量。只推四种方言入口的模型调用，`/healthz` 与 `/v1/models` 这类探活不会被推送。攒批在内存里做，发送失败按退避重试（1 秒起步，每次翻倍，最多 30 秒），不挡转发。内存队列上限 10000 行，满了丢最旧的一条并记 WARN。Ctrl-C 之后先停止转发，再用最多 10 秒把队列里剩下的发完，超时记 WARN 放弃。对端按 `request_id` 幂等，重试时整批重发，cli 不记哪些发过。
+
+字段口径见 web 仓库的 `docs/forwarding-ingest.md`。有两处现在没有来源，留空：
+
+- `user_id` 与 `api_key_id`：`Outcome` 里没有身份，内核现在也不做客户端密钥鉴权。留空的记录在用户面板里看不见，只有控制台的全站视图能看。要填得先定 web 侧提供密钥校验端点，还是内核直接读 web 的库。
+- `billing` 数组：`config.Model` 没有单价与倍率，算不出金额。现在不发，避免账单流水页多出一堆零。
+
 ## 测试服务
 
 `tokenmp test` 回答「这条渠道现在能不能用」。`config validate` 只查语法，
