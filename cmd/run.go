@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/tokenmp/cli/internal/media"
 	"github.com/tokenmp/cli/internal/metrics"
 	"github.com/tokenmp/cli/internal/pluginmgr"
+	"github.com/tokenmp/cli/internal/records"
 )
 
 // geminiEndpoint 是 Gemini 端点的路径形状。core 没有导出这个前缀，这里只用于启动
@@ -24,6 +26,10 @@ const geminiEndpoint = "/v1beta/models/{模型名}:{动作}"
 
 // shutdownNote 是启动信息末尾的提示。
 const shutdownNote = "按 Ctrl-C 停止：先停止接收新连接，再给在途请求最多 10 秒结束。"
+
+// recordsFlushTimeout 是停机后把内存队列里剩下的调用记录发完的上限。与在途请求的
+// 收尾时间一致：两件事同时收尾，不必给两套等待。做成变量是为了测试能缩短它。
+var recordsFlushTimeout = 10 * time.Second
 
 func newRunCmd() *cobra.Command {
 	var opts runOptions
@@ -48,6 +54,10 @@ func newRunCmd() *cobra.Command {
 账目与指标行里除了上游给出的 token 数，还记流式请求的首字节延迟 ttft 与生成速率
 tps。tps 的分母是生成时长（总时长减 ttft），预填充与排队不算进去；非流式响应一次
 写完，这两个数对它没有意义，因此不记。
+
+配置里写了 records 段时，每个请求结束还会把这条账目推给 web 的摄入端点：内存里攒批，
+攒够一批或到兜底间隔就发，发失败按退避重试，不挡转发。队列有上限，满了丢最旧的一条
+并记 WARN；Ctrl-C 之后先把队列里剩下的发完。端点不通只影响推送，不影响转发。
 
 服务提供的端点：
  - /v1/chat/completions，OpenAI Chat
@@ -145,12 +155,41 @@ func logOutcome(logs logging.Loggers, outcome server.Outcome) {
 
 // runServer 装配并运行服务。
 func runServer(cmd *cobra.Command, opts runOptions) error {
-	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), logging.New, logOutcome)
+	// 日志与记录推送接在同一处 OnRequestDone 上，共用一份 Outcome：core 只交一次，
+	// 两边各拿各的字段，不重复解析。sender 要等配置加载完才知道要不要建，因此先在
+	// 闭包里捕获变量，装配之后再赋值。
+	var sender *records.Sender
+	onDone := func(logs logging.Loggers, outcome server.Outcome) {
+		logOutcome(logs, outcome)
+		if sender == nil {
+			return
+		}
+		// 只推四种方言入口的调用。/healthz、/v1/models 与未知路径也会走 OnRequestDone，
+		// 但它们不是模型调用，进请求日志只会变成噪声。
+		if row := records.FromOutcome(outcome, time.Now()); row.Entry != "" {
+			sender.Add(row)
+		}
+	}
+
+	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), logging.New, onDone)
 	if err != nil {
 		return err
 	}
 	if opts.listen != "" {
 		assembled.Config.Listen = opts.listen
+	}
+
+	if recordsCfg := assembled.Env.Records; recordsCfg != nil {
+		// 密钥在启动时读一次，与渠道凭据同一规矩：缺值就退出，不拖到发不出去才发现。
+		secret, err := recordsCfg.SecretFromEnv()
+		if err != nil {
+			return err
+		}
+		if !opts.dryRun {
+			sender = records.New(*recordsCfg, secret, assembled.Loggers.Own)
+			// Serve 返回时转发已经停了，这时再把队列里剩下的发完。
+			defer sender.Close(recordsFlushTimeout)
+		}
 	}
 
 	writer := out(cmd)
@@ -180,8 +219,7 @@ func printRunSummary(w io.Writer, env *configmgr.Env, cfg *config.Config, addres
 	// 插件目录的判定与插件命令共用一处实现，这里只借用它的 Exists。
 	plugins := &pluginmgr.Env{Env: env, Dir: cfg.Plugins.Dir}
 
-	fmt.Fprintln(w, palette.program.Render("TokenMP 转发服务"))
-	printFields(w, [][2]string{
+	fields := [][2]string{
 		{"配置", env.ConfigPath},
 		{"监听", address},
 		{"日志", cfg.Log.Format + " / " + cfg.Log.Level},
@@ -189,8 +227,14 @@ func printRunSummary(w io.Writer, env *configmgr.Env, cfg *config.Config, addres
 		{"模型规则", fmt.Sprintf("%d 条", len(cfg.Models))},
 		{"插件", fmt.Sprintf("%d 个启用", len(cfg.EnabledPlugins()))},
 		{"插件目录", pluginDirText(plugins)},
-		{"端点", endpointList()},
-	})
+	}
+	if env.Records.Enabled() {
+		fields = append(fields, [2]string{"记录推送", env.Records.Endpoint})
+	}
+	fields = append(fields, [2]string{"端点", endpointList()})
+
+	fmt.Fprintln(w, palette.program.Render("TokenMP 转发服务"))
+	printFields(w, fields)
 }
 
 // pluginDirText 描述插件目录，目录不存在时标出来。
