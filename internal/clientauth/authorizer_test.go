@@ -164,27 +164,33 @@ func TestMiddlewareRejections(t *testing.T) {
 		payload    string
 		wantStatus int
 		wantCode   string
+		// wantReason 是客户端能看到的 message。三类失败状态码与错误码都一样，
+		// 差别只在这里，客户端据此才能自己看出是不是过期了。
+		wantReason string
 	}{
 		{
 			name:       "未知密钥",
 			status:     http.StatusNotFound,
 			payload:    `{"error":"密钥不存在"}`,
-			wantStatus: http.StatusNotFound,
+			wantStatus: http.StatusUnauthorized,
 			wantCode:   "invalid_api_key",
+			wantReason: "密钥不存在",
 		},
 		{
 			name:       "密钥或账号停用",
 			status:     http.StatusForbidden,
 			payload:    `{"error":"密钥已停用"}`,
-			wantStatus: http.StatusForbidden,
-			wantCode:   "forbidden",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "invalid_api_key",
+			wantReason: "密钥或账号已停用",
 		},
 		{
 			name:       "密钥过期",
 			status:     http.StatusGone,
 			payload:    `{"error":"密钥已过期"}`,
-			wantStatus: http.StatusGone,
-			wantCode:   "key_expired",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "invalid_api_key",
+			wantReason: "密钥已过期",
 		},
 	}
 
@@ -201,6 +207,9 @@ func TestMiddlewareRejections(t *testing.T) {
 			}
 			if !strings.Contains(body, tc.wantCode) {
 				t.Errorf("错误体里没有 %q: %s", tc.wantCode, body)
+			}
+			if !strings.Contains(body, tc.wantReason) {
+				t.Errorf("错误体里看不出是哪一类失败，缺 %q: %s", tc.wantReason, body)
 			}
 			if called {
 				t.Error("被拒的请求不该调 next")
@@ -323,8 +332,8 @@ func TestMiddlewareCachesRejection(t *testing.T) {
 	front, _ := newFront(t, stub.server.URL, true, nil)
 	for i := 0; i < 3; i++ {
 		response, _ := postJSON(t, front.URL, `{"model":"gpt-4o","messages":[]}`, "Bearer sk-bad")
-		if response.StatusCode != http.StatusNotFound {
-			t.Fatalf("第 %d 次请求状态码是 %d，期望 404", i+1, response.StatusCode)
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("第 %d 次请求状态码是 %d，期望 401", i+1, response.StatusCode)
 		}
 	}
 	if got := stub.calls.Load(); got != 1 {

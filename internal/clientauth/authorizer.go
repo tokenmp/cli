@@ -132,7 +132,10 @@ func (a *Authorizer) Middleware(next http.Handler) http.Handler {
 		}
 		if result.rejected() {
 			a.logRejected(key, result)
-			writeError(writer, result.rejectStatus, result.rejectCode, result.rejectMessage)
+			// 对外只回 401：校验端点把密钥不存在 / 停用 / 过期分成 404 / 403 / 410，那是给
+			// 内核排查用的。传给客户端就不对了 —— 404 看起来像路径不存在，各家 SDK 不会
+			// 按认证失败处理，不会提示重新填密钥。具体是哪一类留在上面那条 WARN 里。
+			writeError(writer, http.StatusUnauthorized, "invalid_api_key", result.rejectMessage)
 			return
 		}
 		if !allowedModel(name, request, result.whitelist) {
@@ -377,11 +380,14 @@ func (a *Authorizer) rejectClient(writer http.ResponseWriter, request *http.Requ
 }
 
 // logRejected 记一条校验端点给出的拒绝。
+// 状态码与错误码取校验端点给的那一份（404 / 403 / 410 与各自的 code），
+// 对外回的是统一的 401，两者的差别只体现在这里。
 func (a *Authorizer) logRejected(key string, result verification) {
 	count := a.rejected.Add(1)
 	a.logger.Warn("客户端密钥校验未通过，拒绝请求",
 		"key", fingerprint(key),
 		"status", result.rejectStatus,
+		"code", result.rejectCode,
 		"reason", result.detail,
 		"rejected_total", count)
 }
