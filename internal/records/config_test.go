@@ -15,6 +15,9 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.FlushInterval.Duration() != DefaultFlushInterval {
 		t.Errorf("flush_interval 默认值是 %s，期望 %s", cfg.FlushInterval, DefaultFlushInterval)
 	}
+	if cfg.CacheTTL.Duration() != DefaultCacheTTL {
+		t.Errorf("cache_ttl 默认值是 %s，期望 %s", cfg.CacheTTL, DefaultCacheTTL)
+	}
 }
 
 func TestConfigValidate(t *testing.T) {
@@ -41,6 +44,15 @@ func TestConfigValidate(t *testing.T) {
 			name:    "密钥变量名为空",
 			cfg:     Config{Endpoint: "http://127.0.0.1:6789"},
 			wantErr: "secret_env 不能为空",
+		},
+		{
+			name: "校验端点协议不对",
+			cfg: Config{
+				Endpoint:     "http://127.0.0.1:6789/api/internal/records",
+				SecretEnv:    "RECORDS_CALLBACK_SECRET",
+				AuthEndpoint: "127.0.0.1:6789/api/internal/api-key",
+			},
+			wantErr: "auth_endpoint 必须是 http:// 或 https://",
 		},
 	}
 
@@ -80,7 +92,57 @@ func TestSecretFromEnv(t *testing.T) {
 	}
 }
 
-// TestEnabled 整段没写时不推送。
+// TestConfigAuthURL 校验端点默认从摄入端点推出，显式写了就用写的那个。
+func TestConfigAuthURL(t *testing.T) {
+	cases := []struct {
+		name     string
+		endpoint string
+		auth     string
+		want     string
+	}{
+		{
+			name:     "从摄入端点推出",
+			endpoint: "http://127.0.0.1:6789/api/internal/records",
+			want:     "http://127.0.0.1:6789/api/internal/api-key",
+		},
+		{
+			name:     "摄入端点带尾斜杠",
+			endpoint: "http://127.0.0.1:6789/api/internal/records/",
+			want:     "http://127.0.0.1:6789/api/internal/api-key",
+		},
+		{
+			name:     "显式写了就用写的",
+			endpoint: "http://127.0.0.1:6789/api/internal/records",
+			auth:     "https://web.example.com/api/internal/api-key",
+			want:     "https://web.example.com/api/internal/api-key",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{Endpoint: tc.endpoint, AuthEndpoint: tc.auth}
+			if got := cfg.AuthURL(); got != tc.want {
+				t.Errorf("校验端点地址是 %q，期望 %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFailClosedEnabled 没写 fail_closed 时默认拒绝。
+func TestFailClosedEnabled(t *testing.T) {
+	if !(&Config{}).FailClosedEnabled() {
+		t.Error("没写 fail_closed 时应当按拒绝处理")
+	}
+	enabled := true
+	if !(&Config{FailClosed: &enabled}).FailClosedEnabled() {
+		t.Error("fail_closed 为 true 时应当拒绝")
+	}
+	disabled := false
+	if (&Config{FailClosed: &disabled}).FailClosedEnabled() {
+		t.Error("fail_closed 为 false 时应当放行")
+	}
+}
+
 func TestEnabled(t *testing.T) {
 	var absent *Config
 	if absent.Enabled() {
