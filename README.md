@@ -111,9 +111,9 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 跨协议转换遇到 data URL 形式的图片时能自己解析，带 `;base64` 与百分号编码两种写法
 都认。按 URL 取回图片内容的能力还没有实现，这类请求会明确报错，不会静默丢掉图片。
 
-### 调用记录推送
+### 调用记录推送与客户端密钥校验
 
-配置里写了 `records` 段时，`tokenmp run` 会把每次调用推给 web 的摄入端点。不写这一段就不推送，`run` 的行为与没有它时一样。
+配置里写了 `records` 段时，`tokenmp run` 会做两件事：把每次调用推给 web 的摄入端点；在转发之前拿客户端密钥调 web 的校验端点，把身份填进记录。不写这一段就都不做，`run` 的行为与没有它时一样。
 
 ```yaml
 records:
@@ -121,23 +121,37 @@ records:
   secret_env: "RECORDS_CALLBACK_SECRET"
   batch_size: 200
   flush_interval: 5s
+  cache_ttl: 1m
+  fail_closed: true
 ```
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `endpoint` | 必填 | 摄入端点地址 |
-| `secret_env` | 必填 | 共享密钥所在的环境变量名 |
+| `auth_endpoint` | 从 `endpoint` 推出 | 客户端密钥校验端点地址。不写时把 `endpoint` 结尾的 `/records` 换成 `/api-key` |
+| `secret_env` | 必填 | 共享密钥所在的环境变量名，两个端点共用 |
 | `batch_size` | `200` | 一批最多的行数 |
 | `flush_interval` | `5s` | 攒不满一批时的兜底发送间隔 |
+| `cache_ttl` | `1m` | 一把密钥的校验结果缓存多久 |
+| `fail_closed` | `true` | 校验端点不通时拒绝还是放行 |
 
-密钥值只从 `secret_env` 指的环境变量读，变量没设置时启动就报错，与渠道凭据同一规矩。请求带 `x-callback-secret` 请求头。
+密钥值只从 `secret_env` 指的环境变量读，变量没设置时启动就报错，与渠道凭据同一规矩。两个端点的请求都带 `x-callback-secret` 请求头，客户端密钥明文只放校验请求的请求体，不放 URL。
 
 推送接在写账目行的同一处 `OnRequestDone` 上，两边共用 core 交出的同一份原始量。只推四种方言入口的模型调用，`/healthz` 与 `/v1/models` 这类探活不会被推送。攒批在内存里做，发送失败按退避重试（1 秒起步，每次翻倍，最多 30 秒），不挡转发。内存队列上限 10000 行，满了丢最旧的一条并记 WARN。Ctrl-C 之后先停止转发，再用最多 10 秒把队列里剩下的发完，超时记 WARN 放弃。对端按 `request_id` 幂等，重试时整批重发，cli 不记哪些发过。
 
-字段口径见 web 仓库的 `docs/forwarding-ingest.md`。有两处现在没有来源，留空：
+字段口径见 web 仓库的 `docs/forwarding-ingest.md`。`billing` 数组现在没有来源：`config.Model` 没有单价与倍率，算不出金额，现在不发，避免账单流水页多出一堆零。
 
-- `user_id` 与 `api_key_id`：`Outcome` 里没有身份，内核现在也不做客户端密钥鉴权。留空的记录在用户面板里看不见，只有控制台的全站视图能看。要填得先定 web 侧提供密钥校验端点，还是内核直接读 web 的库。
-- `billing` 数组：`config.Model` 没有单价与倍率，算不出金额。现在不发，避免账单流水页多出一堆零。
+### 客户端密钥校验
+
+配了 `records` 段的 `tokenmp run` 在转发之前先认调用方：按方言从请求里取客户端密钥，调 web 的 `POST /api/internal/api-key` 换成身份，把 `user_id` 与 `api_key_id` 填进这次的记录。`tokenmp test` 不走这条校验：它在本机发测试请求，没有客户端密钥，考的是上游转发链路。
+
+密钥按方言语境取：OpenAI 与 Claude 认 `Authorization: Bearer` 与 `x-api-key`，Gemini 认 `x-goog-api-key` 与查询串里的 `key`。校验结果按密钥明文的 sha256 缓存，不拿明文当键；同一把密钥在 `cache_ttl` 内只打一次校验端点，被拒的结果同样缓存。缓存有 4096 条上限，到顶先清过期的，还满就丢一条。
+
+校验端点按原因回：未知密钥 `404`、密钥或账号停用 `403`、密钥过期 `410`，都原样转成给客户端的拒绝，错误体与 core 一样是 `{"error":{"message","type","code"}}`。`model_whitelist` 为空表示不限制模型，写了名单而请求的模型不在里面时回 `403`。被拦下的请求不写记录：认不出来是谁，也没有上游渠道，写进去只会污染全站视图的统计。拦下的原因（不是密钥明文，是它的短哈希）与累计条数记 WARN。
+
+校验端点不通（连接失败、超时、5xx、429）时按 `fail_closed` 走：默认拒绝，回 `503` 与 `identity_unavailable`，并记一条带 `unreachable_total` 计数的 WARN，不静默。调试时把 `fail_closed` 设成 `false`，端点不通就放行但不带身份，记录里两列为空。单次校验请求超时 2 秒，失败后隔 200 毫秒再试一次。
+
+端点返回的 `rate_limit_per_min` 收进了缓存结构，但本 issue 不启用：内核现在没有客户端限速，那是另一件事。
 
 ## 测试服务
 
