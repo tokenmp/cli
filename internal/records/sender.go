@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/tokenmp/cli/internal/billing"
 )
 
 // 退避与超时参数。都在这里写一次。
@@ -43,8 +45,11 @@ type Sender struct {
 
 	mu      sync.Mutex
 	queue   []Row
+	billing []billing.Row
 	closed  bool
 	dropped int64
+	// droppedBilling 单独计数：两类行各有各的容量，丢掉的原因分开看。
+	droppedBilling int64
 
 	wake chan struct{}
 	// quit 把停机时的冲刷截止时间交给后台 goroutine，缓冲一格让 Close 不必等它。
@@ -85,7 +90,7 @@ func New(cfg Config, secret string, logger *slog.Logger) *Sender {
 	return sender
 }
 
-// Add 把一行放进队列。队列满时丢最旧的一条并记 WARN。
+// Add 把一行调用记录放进队列。队列满时丢最旧的一条并记 WARN。
 //
 // 它不阻塞：转发路径调它时只拿一次锁。
 func (s *Sender) Add(row Row) {
@@ -114,6 +119,33 @@ func (s *Sender) Add(row Row) {
 	}
 }
 
+// AddBilling 把一行计费放进队列。它与 Add 共用一条发送循环与同一批 POST，队列满了
+// 同样丢最旧的一条。
+//
+// 每来一行就叫一次发送循环，不用等 records 攒够一批：计费行少，早点发出去对账更及时。
+func (s *Sender) AddBilling(row billing.Row) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	dropped := false
+	droppedTotal := int64(0)
+	if len(s.billing) >= s.queueSize {
+		s.billing = s.billing[1:]
+		s.droppedBilling++
+		droppedTotal = s.droppedBilling
+		dropped = true
+	}
+	s.billing = append(s.billing, row)
+	s.mu.Unlock()
+
+	if dropped {
+		s.logger.Warn("计费记录队列已满，丢弃最旧的一行", "queue_size", s.queueSize, "dropped", droppedTotal)
+	}
+	s.signal()
+}
+
 // Close 停止接收新行，把队列里剩下的发完再返回。timeout 是冲刷的上限，超过就放弃
 // 并记 WARN。重复调用只生效一次。
 func (s *Sender) Close(timeout time.Duration) {
@@ -139,7 +171,7 @@ func (s *Sender) run() {
 
 	// pending 是已经取出来但还没送出的一批。发送被打断时留着它，停机时先发它，
 	// 这样取消 sendCtx 不会把手里这批丢掉。
-	var pending []Row
+	var pending batch
 	for {
 		select {
 		case ctx := <-s.quit:
@@ -149,14 +181,14 @@ func (s *Sender) run() {
 		case <-s.wake:
 		}
 
-		if len(pending) == 0 {
+		if pending.empty() {
 			pending = s.take(s.batchSize)
 		}
-		if len(pending) == 0 {
+		if pending.empty() {
 			continue
 		}
 		if err := s.deliver(s.sendCtx, pending); err == nil {
-			pending = nil
+			pending = batch{}
 			// 队列里还够一批就立刻接着发，不必等下一次兜底间隔。
 			if s.size() >= s.batchSize {
 				s.signal()
@@ -166,20 +198,21 @@ func (s *Sender) run() {
 }
 
 // finish 是停机时的收尾：先补发手里这批，再把队列排空。都按 ctx 的截止时间试。
-func (s *Sender) finish(ctx context.Context, pending []Row) {
-	if len(pending) > 0 {
+func (s *Sender) finish(ctx context.Context, pending batch) {
+	if !pending.empty() {
 		if err := s.deliver(ctx, pending); err != nil {
-			s.logger.Warn("服务停止时发送调用记录超时，放弃这一批", "rows", len(pending), "error", err)
+			s.logger.Warn("服务停止时发送调用记录超时，放弃这一批",
+				"records", len(pending.records), "billing", len(pending.billing), "error", err)
 		}
 	}
 	for {
-		batch := s.take(s.batchSize)
-		if len(batch) == 0 {
+		next := s.take(s.batchSize)
+		if next.empty() {
 			return
 		}
-		if err := s.deliver(ctx, batch); err != nil {
+		if err := s.deliver(ctx, next); err != nil {
 			s.logger.Warn("服务停止时发送调用记录超时，放弃剩余",
-				"rows", len(batch)+s.size(), "error", err)
+				"records", len(next.records)+s.size(), "billing", len(next.billing)+s.billingSize(), "error", err)
 			return
 		}
 	}
@@ -189,23 +222,24 @@ func (s *Sender) finish(ctx context.Context, pending []Row) {
 //
 // 返回 nil 表示这批已经处理完（送出，或遇到重试也不会变好的响应）；返回错误表示
 // ctx 结束了，这批还没送出，由调用方决定留着还是放弃。
-func (s *Sender) deliver(ctx context.Context, batch []Row) error {
+func (s *Sender) deliver(ctx context.Context, b batch) error {
 	backoff := s.initialDelay
 	attempt := 0
 	for {
-		err := s.post(ctx, batch)
+		err := s.post(ctx, b)
 		switch {
 		case err == nil:
 			return nil
 		case errors.Is(err, errNotRetryable):
-			s.logger.Warn("摄入端点拒绝这批调用记录，不再重试", "rows", len(batch), "error", err)
+			s.logger.Warn("摄入端点拒绝这批记录，不再重试",
+				"records", len(b.records), "billing", len(b.billing), "error", err)
 			return nil
 		case ctx.Err() != nil:
 			return err
 		}
 		attempt++
 		s.logger.Warn("发送调用记录失败，将重试",
-			"attempt", attempt, "rows", len(batch), "error", err, "backoff", backoff)
+			"attempt", attempt, "records", len(b.records), "billing", len(b.billing), "error", err, "backoff", backoff)
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
@@ -219,10 +253,14 @@ func (s *Sender) deliver(ctx context.Context, batch []Row) error {
 }
 
 // post 发一批。4xx（429 除外）是重试也不会变好的响应，单独标出来。
-func (s *Sender) post(ctx context.Context, batch []Row) error {
+//
+// 调用记录与计费行同一批 POST：web 那边的两张表独立插入，靠 request_id 关联，
+// 不要求有序，因此不必分成两次请求。
+func (s *Sender) post(ctx context.Context, b batch) error {
 	body, err := json.Marshal(struct {
-		Records []Row `json:"records"`
-	}{Records: batch})
+		Records []Row         `json:"records"`
+		Billing []billing.Row `json:"billing,omitempty"`
+	}{Records: b.records, Billing: b.billing})
 	if err != nil {
 		return err
 	}
@@ -250,26 +288,52 @@ func (s *Sender) post(ctx context.Context, batch []Row) error {
 	return err
 }
 
-// take 从队首取最多 n 行。
-func (s *Sender) take(n int) []Row {
+// batch 是取出来、准备发送的一批。两类行一起带：web 两者独立插入，不要求有序。
+type batch struct {
+	records []Row
+	billing []billing.Row
+}
+
+// empty 报告这批没有东西可发。
+func (b batch) empty() bool {
+	return len(b.records) == 0 && len(b.billing) == 0
+}
+
+// take 从两个队首各取最多 n 行。
+func (s *Sender) take(n int) batch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.queue) == 0 {
+	return batch{
+		records: takeFirst(&s.queue, n),
+		billing: takeFirst(&s.billing, n),
+	}
+}
+
+// takeFirst 从队首取最多 n 个，返回取到的副本。
+func takeFirst[T any](queue *[]T, n int) []T {
+	if len(*queue) == 0 {
 		return nil
 	}
-	if n > len(s.queue) {
-		n = len(s.queue)
+	if n > len(*queue) {
+		n = len(*queue)
 	}
-	batch := append([]Row(nil), s.queue[:n]...)
-	s.queue = s.queue[n:]
+	batch := append([]T(nil), (*queue)[:n]...)
+	*queue = (*queue)[n:]
 	return batch
 }
 
-// size 返回队列当前行数。
+// size 返回调用记录队列当前行数。
 func (s *Sender) size() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.queue)
+}
+
+// billingSize 返回计费队列当前行数。
+func (s *Sender) billingSize() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.billing)
 }
 
 // signal 叫醒后台循环，已经有信号在排队时不重复发。
@@ -280,9 +344,16 @@ func (s *Sender) signal() {
 	}
 }
 
-// Dropped 返回因为队列满而丢掉的行数。给测试与观测用。
+// Dropped 返回因为队列满而丢掉的调用记录行数。给测试与观测用。
 func (s *Sender) Dropped() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.dropped
+}
+
+// DroppedBilling 返回因为队列满而丢掉的计费行数。
+func (s *Sender) DroppedBilling() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.droppedBilling
 }

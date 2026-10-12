@@ -12,6 +12,8 @@ import (
 	"time"
 
 	coreconfig "github.com/tokenmp/core/config"
+
+	"github.com/tokenmp/cli/internal/billing"
 )
 
 // receivedBatch 是摄入端点收到的一批，测试用它核对内容与请求头。
@@ -191,5 +193,40 @@ func TestSenderAddDoesNotBlockWhenEndpointDown(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("往不通的端点加 200 行花了 %s，Add 不该阻塞", elapsed)
+	}
+}
+
+// TestSenderPostsRecordsAndBillingTogether 调用记录与计费行同一批 POST：web 两张表
+// 独立插入，靠 request_id 关联。
+func TestSenderPostsRecordsAndBillingTogether(t *testing.T) {
+	type payload struct {
+		Records []Row         `json:"records"`
+		Billing []billing.Row `json:"billing"`
+	}
+	received := make(chan payload, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var got payload
+		_ = json.Unmarshal(body, &got)
+		received <- got
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	sender := newTestSender(server.URL, 100)
+	sender.Add(Row{RequestID: "req_1"})
+	sender.AddBilling(billing.Row{RequestID: "req_1", RevenueAmount: 0.5, Status: "settled"})
+	sender.Close(time.Second)
+
+	select {
+	case got := <-received:
+		if len(got.Records) != 1 || got.Records[0].RequestID != "req_1" {
+			t.Errorf("records 是 %+v", got.Records)
+		}
+		if len(got.Billing) != 1 || got.Billing[0].RequestID != "req_1" {
+			t.Errorf("billing 是 %+v", got.Billing)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等摄入端点收到请求超时")
 	}
 }
