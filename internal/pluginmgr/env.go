@@ -307,7 +307,6 @@ func (e *Env) Edit(key, field string, value any) error {
 		return fmt.Errorf("配置文件 %s 不存在，无法改写启用状态与顺序", e.ConfigPath)
 	}
 	return configedit.SetPluginField(e.ConfigPath, key, field, value, func() error {
-		_, err := config.Load(e.ConfigPath)
-		return err
+		return configmgr.Validate(e.ConfigPath)
 	})
 }

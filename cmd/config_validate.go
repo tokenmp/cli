@@ -54,7 +54,7 @@ func newConfigValidateCmd(opts *configOptions) *cobra.Command {
 				return fmt.Errorf("解析配置文件路径失败: %w", err)
 			}
 
-			cfg, hasConfig, inspectErr := configmgr.Inspect(opts.configPath)
+			cfg, _, hasConfig, inspectErr := configmgr.Inspect(opts.configPath)
 			result := configCheck{Path: absolute, Exists: hasConfig, Valid: inspectErr == nil}
 			switch {
 			case !hasConfig:
