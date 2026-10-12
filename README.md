@@ -113,7 +113,7 @@ level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_to
 
 ### 调用记录推送与客户端密钥校验
 
-配置里写了 `records` 段时，`tokenmp run` 会做两件事：把每次调用推给 web 的摄入端点；在转发之前拿客户端密钥调 web 的校验端点，把身份填进记录。不写这一段就都不做，`run` 的行为与没有它时一样。
+配置里写了 `records` 段时，`tokenmp run` 会做三件事：把每次调用推给 web 的摄入端点；在转发之前拿客户端密钥调 web 的校验端点，把身份填进记录；配了 `cost` 段时再按用量与两侧计价口径算金额，成功且收入大于 0 的调用多推一行 `billing`。不写 `records` 段就都不做，`run` 的行为与没有它时一样。
 
 ```yaml
 records:
@@ -139,7 +139,42 @@ records:
 
 推送接在写账目行的同一处 `OnRequestDone` 上，两边共用 core 交出的同一份原始量。只推四种方言入口的模型调用，`/healthz` 与 `/v1/models` 这类探活不会被推送。攒批在内存里做，发送失败按退避重试（1 秒起步，每次翻倍，最多 30 秒），不挡转发。内存队列上限 10000 行，满了丢最旧的一条并记 WARN。Ctrl-C 之后先停止转发，再用最多 10 秒把队列里剩下的发完，超时记 WARN 放弃。对端按 `request_id` 幂等，重试时整批重发，cli 不记哪些发过。
 
-字段口径见 web 仓库的 `docs/forwarding-ingest.md`。`billing` 数组现在没有来源：`config.Model` 没有单价与倍率，算不出金额，现在不发，避免账单流水页多出一堆零。
+字段口径见 web 仓库的 `docs/forwarding-ingest.md`。推送一次带两个数组：`records` 每次都发，`billing` 只在调用成功且收入大于 0 时才有。两者同一批 POST，web 独立插入，靠 `request_id` 关联，不要求有序。
+
+#### 金额与 billing
+
+`billing` 的金额由本机算，算完只交用量与金额，`ledger` 由 web 在摄入时按用户当期的订阅余量判定。收入侧的口径来自密钥校验端点：套餐是 `markup` 模式时收入是成本乘 `markup_multiplier`，是 `table` 模式时按该套餐的模型价目算。成本单价是 cli 自己的配置，落在 `cost` 段，每条渠道一组，`cost_models` 按模型覆盖：
+
+```yaml
+cost:
+  currency: CNY
+  channels:
+    openrouter:
+      cost_input_per_million: 2.5
+      cost_output_per_million: 10
+      cost_cache_read_per_million: 0.25
+      cost_cache_write_per_million: 1.25
+      cost_models:
+        gpt-5:
+          input_per_million: 5
+          output_per_million: 15
+    pool/team-a:
+      cost_mode: request
+      cost_per_request: 0.02
+```
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `currency` | `CNY` | 金额币种，写进 billing 行 |
+| `channels` | 必填 | 按展开后的渠道名索引的上游成本单价 |
+| `channels.<渠道>.cost_mode` | `token` | `token` 按 token 单价算，`request` 只看 `cost_per_request` |
+| `cost_input_per_million` 等四个 | `0` | 每百万 token 的单价 |
+| `cost_per_request` | `0` | 按次计费的单价 |
+| `cost_models` | 无 | 按模型的覆盖，写了就整组替换渠道级单价，没写 `cost_mode` 时继承 |
+
+计价一律先把缓存读与缓存写从提示词里扣掉：core 归一之后 `prompt_tokens` 包含这两部分，不扣的话命中的 token 会先按输入价收一遍、再按缓存价收一遍。成本与收入各记一次，两列倍率规则记下命中的渠道与套餐，以后对账能回答「这笔为什么是这个倍率」。
+
+`table` 模式的价目表按用户看到的模型名建，而 core 交出的 `Outcome.Model` 是插件改写之后参与匹配的名字，直接查不到时按 cli 的模型规则反查：找 `upstream` 等于它的那条，用它的 `match` 再查一次。没套餐、价目表缺这个模型、或 `cost` 段没配这条渠道时算不出来，只发 `records`，并记一条 WARN。没配 `cost` 段就只发 `records`，不发 `billing`。
 
 ### 客户端密钥校验
 
@@ -672,6 +707,9 @@ make clean
 | [internal/highlight](internal/highlight/highlight.go) | 配置文本的语法高亮，主题按终端明暗选 |
 | [internal/logging](internal/logging/logging.go) | 按配置里的 log 段构造服务日志 |
 | [internal/media](internal/media/media.go) | 媒体解析回调，目前只解析 data URL |
+| [internal/records](internal/records/sender.go) | 调用记录与计费行的组装、攒批与推送 |
+| [internal/clientauth](internal/clientauth/identity.go) | 转发路径上认客户端密钥，带回身份与计价口径 |
+| [internal/billing](internal/billing/calc.go) | 按用量与两侧计价口径算成本与收入，组装 billing 行 |
 | [internal/metrics](internal/metrics/metrics.go) | 账目与指标行的口径：TTFT、TPS |
 | [internal/version](internal/version/version.go) | 构建元数据与回退逻辑 |
 

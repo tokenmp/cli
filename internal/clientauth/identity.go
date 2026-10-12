@@ -14,10 +14,53 @@ import (
 	"github.com/tokenmp/core/dialect"
 )
 
-// Identity 是一次调用认出的身份，取自 web 校验端点的 user_id 与 api_key_id。
+// Identity 是一次调用认出的身份，取自 web 校验端点：user_id、api_key_id，以及该
+// 用户当前套餐的计价口径 Pricing。
 type Identity struct {
 	UserID   int64
 	APIKeyID int64
+	// Pricing 是收入侧的计价口径，由 web 按用户的当前套餐给出。校验端点没给这一段
+	// 时是零值，金额因此算不出来，宿主只推调用记录、不发 billing。
+	Pricing Pricing
+}
+
+// 计价模式。web 的 plan.pricing_mode 用这两个取值。
+const (
+	// PricingModeMarkup 是成本乘倍率：revenue = cost × markup_multiplier。
+	PricingModeMarkup = "markup"
+	// PricingModeTable 是按套餐的模型价目表算。
+	PricingModeTable = "table"
+)
+
+// Pricing 是 web 校验端点给出的计价口径。
+type Pricing struct {
+	// PlanID 是用户当前套餐的 id，没有套餐时为空。
+	PlanID *int64
+	// Mode 是 PricingModeMarkup 或 PricingModeTable，没有套餐时为空串。
+	Mode string
+	// MarkupMultiplier 只有 markup 模式用得上。
+	MarkupMultiplier float64
+	// Prices 是 table 模式的模型价目表，按模型名索引。markup 模式与没有套餐时为空。
+	Prices map[string]Price
+}
+
+// Price 是套餐里一个模型的价。字段名与 web 的 plan_prices 一致，金额单位是每百万 token。
+type Price struct {
+	// CostMode 取 token 或 request。request 时按 PerRequest 与 RequestWeight 算，
+	// 不看 token。
+	CostMode             string
+	InputPerMillion      float64
+	OutputPerMillion     float64
+	CacheReadPerMillion  float64
+	CacheWritePerMillion float64
+	PerRequest           float64
+	RequestWeight        float64
+}
+
+// Price 按模型名取价目。没有该模型时返回假值。
+func (p Pricing) Price(model string) (Price, bool) {
+	price, ok := p.Prices[model]
+	return price, ok
 }
 
 // identityKey 是身份在 context 里的键。用私有类型避免与别的包撞键。

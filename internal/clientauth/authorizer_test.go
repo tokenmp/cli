@@ -143,6 +143,9 @@ func TestMiddlewareValidKeyReachesNextAndCarriesIdentity(t *testing.T) {
 	if identity.UserID != 263 || identity.APIKeyID != 42 {
 		t.Errorf("身份是 %+v，期望 263/42", identity)
 	}
+	if identity.Pricing.Mode != PricingModeMarkup || identity.Pricing.MarkupMultiplier != 1.15 {
+		t.Errorf("计价口径是 %+v，期望 markup/1.15", identity.Pricing)
+	}
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
 	if stub.secret != "test-secret" {
@@ -411,5 +414,32 @@ func TestFingerprintDoesNotLeakPlaintext(t *testing.T) {
 func TestFromContextWithoutIdentity(t *testing.T) {
 	if _, ok := FromContext(context.Background()); ok {
 		t.Error("空 context 里不该有身份")
+	}
+}
+
+// TestDecodeSuccessCarriesPricing table 模式的价目表要跟着身份一起带出来，供算金额用。
+func TestDecodeSuccessCarriesPricing(t *testing.T) {
+	payload := `{"ok":true,"data":{"user_id":1,"api_key_id":2,"model_whitelist":null,` +
+		`"rate_limit_per_min":null,"expires_at":null,"pricing":{"plan_id":7,"pricing_mode":"table",` +
+		`"markup_multiplier":1,"prices":[{"model":"gpt-4o","cost_mode":"token",` +
+		`"input_per_million":3,"output_per_million":6,"cache_read_per_million":0.3,` +
+		`"cache_write_per_million":1.5,"per_request":0,"request_weight":1}]}}}`
+	result, err := decodeSuccess([]byte(payload))
+	if err != nil {
+		t.Fatalf("decodeSuccess: %v", err)
+	}
+	pricing := result.identity.Pricing
+	if pricing.Mode != PricingModeTable {
+		t.Fatalf("模式是 %q，期望 table", pricing.Mode)
+	}
+	if pricing.PlanID == nil || *pricing.PlanID != 7 {
+		t.Errorf("plan_id 是 %v，期望 7", pricing.PlanID)
+	}
+	price, ok := pricing.Price("gpt-4o")
+	if !ok {
+		t.Fatalf("价目表里没有 gpt-4o: %+v", pricing.Prices)
+	}
+	if price.InputPerMillion != 3 || price.CacheWritePerMillion != 1.5 {
+		t.Errorf("单价是 %+v", price)
 	}
 }

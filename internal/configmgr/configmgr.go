@@ -21,6 +21,7 @@ import (
 	"github.com/tokenmp/core/config"
 	"gopkg.in/yaml.v3"
 
+	"github.com/tokenmp/cli/internal/billing"
 	"github.com/tokenmp/cli/internal/configedit"
 	"github.com/tokenmp/cli/internal/records"
 )
@@ -41,23 +42,33 @@ type Env struct {
 	// Records 是 records 段，整段没写时为 nil。它不是 core 的配置字段，由这层接住，
 	// 见 fileConfig。
 	Records *records.Config
+	// Cost 是 cost 段，整段没写时为 nil。同样不是 core 的字段，由这层接住。
+	Cost *billing.Config
 	// HasConfig 报告配置文件是否存在。
 	HasConfig bool
 	// Dir 是配置文件所在目录，插件目录等相对路径以它为基准。
 	Dir string
 }
 
-// fileConfig 在 core 的配置模型之外多带一个 cli 自己的 records 段。
+// fileConfig 在 core 的配置模型之外多带 cli 自己的 records 与 cost 段。
 //
-// records 是 cli 侧的概念：把每次调用推给 web 的摄入端点，core 不认识它。而解码开着
-// KnownFields，直接把文件解进 core.Config 会因为多出这个键而报错，因此用一层内联
-// 包装把它接住，core 的那部分照旧走 config.Config 的方法与校验。
+// 两段都是 cli 侧的概念：records 把每次调用推给 web 的摄入端点，cost 是付给上游的
+// 成本单价，core 都不认识。而解码开着 KnownFields，直接把文件解进 core.Config 会因为
+// 多出这两个键而报错，因此用一层内联包装把它们接住，core 的那部分照旧走 config.Config
+// 的方法与校验。
 //
-// Records 用指针：nil 表示整段没写，config show 里也就不出现 records；写了才出现，
-// 并带上填好的默认值。
+// 两段都用指针：nil 表示整段没写，config show 里也就不出现；写了才出现，并带上填好的
+// 默认值。
 type fileConfig struct {
 	config.Config `yaml:",inline"`
 	Records       *records.Config `yaml:"records,omitempty"`
+	Cost          *billing.Config `yaml:"cost,omitempty"`
+}
+
+// CliSections 是 core 配置模型之外、cli 自己那几段配置。整段没写时对应字段为 nil。
+type CliSections struct {
+	Records *records.Config
+	Cost    *billing.Config
 }
 
 // Open 读取并校验配置。配置文件不存在不算错误：只看目录的命令不必先有配置。
@@ -99,8 +110,8 @@ func LoadExpanded(configPath string) (*Env, error) {
 }
 
 // openWith 走完「读配置、定位目录、补相对路径」的公共流程。inspect 决定读哪一份形态。
-func openWith(configPath string, inspect func(string) (*config.Config, *records.Config, bool, error)) (*Env, error) {
-	cfg, rec, hasConfig, err := inspect(configPath)
+func openWith(configPath string, inspect func(string) (*config.Config, CliSections, bool, error)) (*Env, error) {
+	cfg, sections, hasConfig, err := inspect(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +127,8 @@ func openWith(configPath string, inspect func(string) (*config.Config, *records.
 	return &Env{
 		ConfigPath: absolute,
 		Config:     cfg,
-		Records:    rec,
+		Records:    sections.Records,
+		Cost:       sections.Cost,
 		HasConfig:  hasConfig,
 		Dir:        filepath.Dir(absolute),
 	}, nil
@@ -128,17 +140,17 @@ func openWith(configPath string, inspect func(string) (*config.Config, *records.
 // 给出。配置文件不存在时返回一份只剩默认值的空配置与假值，不算错误。
 //
 // 返回的是按文件原样解析的形态，路径与下标口径与 config get 一致。
-func Inspect(configPath string) (*config.Config, *records.Config, bool, error) {
-	cfg, rec, err := parseConfigFile(configPath)
+func Inspect(configPath string) (*config.Config, CliSections, bool, error) {
+	cfg, sections, err := parseConfigFile(configPath)
 	switch {
 	case err == nil:
-		return cfg, rec, true, nil
+		return cfg, sections, true, nil
 	case errors.Is(err, fs.ErrNotExist):
 		empty := &config.Config{}
 		empty.Defaults()
-		return empty, nil, false, nil
+		return empty, CliSections{}, false, nil
 	default:
-		return nil, nil, true, err
+		return nil, CliSections{}, true, err
 	}
 }
 
@@ -147,17 +159,17 @@ func Inspect(configPath string) (*config.Config, *records.Config, bool, error) {
 // 它不走 core 的 config.Load：那份的解码认不出 records 段。这里复用 parseConfigFile
 // 自己拼的那一份，再调一次 Expand，结果与 core.Load 一致，差异由 configmgr 的
 // 防回归测试盯着。
-func inspectExpanded(configPath string) (*config.Config, *records.Config, bool, error) {
-	cfg, rec, err := parseConfigFile(configPath)
+func inspectExpanded(configPath string) (*config.Config, CliSections, bool, error) {
+	cfg, sections, err := parseConfigFile(configPath)
 	switch {
 	case err == nil:
-		return cfg.Expand(), rec, true, nil
+		return cfg.Expand(), sections, true, nil
 	case errors.Is(err, fs.ErrNotExist):
 		empty := &config.Config{}
 		empty.Defaults()
-		return empty, nil, false, nil
+		return empty, CliSections{}, false, nil
 	default:
-		return nil, nil, true, err
+		return nil, CliSections{}, true, err
 	}
 }
 
@@ -179,11 +191,11 @@ func Validate(path string) error {
 //
 // 展开之后的形态也校验一次：展开名与手写渠道名撞车这类问题只在平铺形态里出现，
 // 少这一步会漏掉；core 的 Parse 同样校验两次。
-func parseConfigFile(path string) (*config.Config, *records.Config, error) {
+func parseConfigFile(path string) (*config.Config, CliSections, error) {
 	//nolint:gosec // 路径来自调用方：配置文件位置由使用者给出。
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, CliSections{}, err
 	}
 	defer func() { _ = file.Close() }()
 
@@ -192,39 +204,45 @@ func parseConfigFile(path string) (*config.Config, *records.Config, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&raw); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, nil, errors.New("配置文件为空")
+			return nil, CliSections{}, errors.New("配置文件为空")
 		}
-		return nil, nil, err
+		return nil, CliSections{}, err
 	}
 	cfg := &raw.Config
 	cfg.Defaults()
 	if err := cfg.Validate(); err != nil {
-		return nil, nil, err
+		return nil, CliSections{}, err
 	}
 	if raw.Records != nil {
 		raw.Records.Defaults()
 		if err := raw.Records.Validate(); err != nil {
-			return nil, nil, err
+			return nil, CliSections{}, err
+		}
+	}
+	if raw.Cost != nil {
+		raw.Cost.Defaults()
+		if err := raw.Cost.Validate(); err != nil {
+			return nil, CliSections{}, err
 		}
 	}
 	if err := cfg.Expand().Validate(); err != nil {
-		return nil, nil, err
+		return nil, CliSections{}, err
 	}
 
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("解析配置文件路径失败: %w", err)
+		return nil, CliSections{}, fmt.Errorf("解析配置文件路径失败: %w", err)
 	}
 	cfg.Path = absolute
 	if cfg.Plugins.Dir != "" && !filepath.IsAbs(cfg.Plugins.Dir) {
 		cfg.Plugins.Dir = filepath.Join(filepath.Dir(absolute), cfg.Plugins.Dir)
 	}
-	return cfg, raw.Records, nil
+	return cfg, CliSections{Records: raw.Records, Cost: raw.Cost}, nil
 }
 
-// document 把 core 的配置与 cli 自己的 records 段拼回与配置文件同形的值。
+// document 把 core 的配置与 cli 自己的 records、cost 段拼回与配置文件同形的值。
 func (e *Env) document() fileConfig {
-	document := fileConfig{Records: e.Records}
+	document := fileConfig{Records: e.Records, Cost: e.Cost}
 	if e.Config != nil {
 		document.Config = *e.Config
 	}

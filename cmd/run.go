@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/tokenmp/core/dialect"
 	"github.com/tokenmp/core/server"
 
+	"github.com/tokenmp/cli/internal/billing"
 	"github.com/tokenmp/cli/internal/clientauth"
 	"github.com/tokenmp/cli/internal/configmgr"
 	"github.com/tokenmp/cli/internal/logging"
@@ -192,9 +194,10 @@ func logOutcome(logs logging.Loggers, outcome server.Outcome) {
 // runServer 装配并运行服务。
 func runServer(cmd *cobra.Command, opts runOptions) error {
 	// 日志与记录推送接在同一处 OnRequestDone 上，共用一份 Outcome：core 只交一次，
-	// 两边各拿各的字段，不重复解析。sender 要等配置加载完才知道要不要建，因此先在
-	// 闭包里捕获变量，装配之后再赋值。
+	// 两边各拿各的字段，不重复解析。sender 与 calc 要等配置加载完才知道要不要建，
+	// 因此先在闭包里捕获变量，装配之后再赋值。
 	var sender *records.Sender
+	var calc *billing.Calculator
 	onDone := func(ctx context.Context, logs logging.Loggers, outcome server.Outcome) {
 		logOutcome(logs, outcome)
 		if sender == nil {
@@ -202,17 +205,39 @@ func runServer(cmd *cobra.Command, opts runOptions) error {
 		}
 		// 只推四种方言入口的调用。/healthz、/v1/models 与未知路径也会走 OnRequestDone，
 		// 但它们不是模型调用，进请求日志只会变成噪声。
-		row := records.FromOutcome(outcome, time.Now())
+		now := time.Now()
+		row := records.FromOutcome(outcome, now)
 		if row.Entry == "" {
 			return
 		}
 		// 身份由密钥校验中间件放进 context。fail_closed 为假而端点不通时放行的请求
 		// 没有身份，两列留空。
-		if identity, ok := clientauth.FromContext(ctx); ok {
+		identity, hasIdentity := clientauth.FromContext(ctx)
+		if hasIdentity {
 			row.UserID = &identity.UserID
 			row.APIKeyID = &identity.APIKeyID
 		}
 		sender.Add(row)
+
+		// 金额要有计价口径才能算。没有身份（放行的请求）时连 user_id 都没有，
+		// 不尝试也不记 WARN；有身份但算不出来（没套餐、价目表缺这个模型、cost 段
+		// 没配这条渠道）时记一条 WARN，只发调用记录。
+		if calc == nil || !hasIdentity {
+			return
+		}
+		billingRow, err := calc.Row(outcome, identity, now)
+		switch {
+		case err == nil:
+			sender.AddBilling(billingRow)
+		case errors.Is(err, billing.ErrNotBillable):
+			// 调用失败，或成功但收入不大于 0（免费模型、额度内不额外计费）。
+		case err != nil:
+			logs.Own.Warn("算不出这笔调用的金额，只推调用记录",
+				"request_id", outcome.RequestID,
+				"model", outcome.Model,
+				"channel", outcome.Channel,
+				"error", err.Error())
+		}
 	}
 
 	assembled, err := assemble(opts.configPath, cmd.ErrOrStderr(), logging.New, onDone, clientAuthOn)
@@ -234,6 +259,10 @@ func runServer(cmd *cobra.Command, opts runOptions) error {
 			// Serve 返回时转发已经停了，这时再把队列里剩下的发完。
 			defer sender.Close(recordsFlushTimeout)
 		}
+	}
+	// cost 段配了渠道才建计算器：没配时只发 records，不发 billing，与没有这一段时一样。
+	if costCfg := assembled.Env.Cost; costCfg.Enabled() && !opts.dryRun {
+		calc = billing.New(*costCfg, assembled.Config.Models)
 	}
 
 	writer := out(cmd)
@@ -277,6 +306,9 @@ func printRunSummary(w io.Writer, env *configmgr.Env, cfg *config.Config, addres
 			[2]string{"记录推送", env.Records.Endpoint},
 			[2]string{"密钥校验", env.Records.AuthURL()},
 		)
+	}
+	if env.Cost.Enabled() {
+		fields = append(fields, [2]string{"成本单价", fmt.Sprintf("%d 个渠道", len(env.Cost.Channels))})
 	}
 	fields = append(fields, [2]string{"端点", endpointList()})
 

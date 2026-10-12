@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,15 +165,133 @@ func TestRunPushesCallRecords(t *testing.T) {
 	if row.PromptTokens == nil || *row.PromptTokens != 10 {
 		t.Errorf("prompt_tokens 是 %v，期望 10", row.PromptTokens)
 	}
-	// billing 数组现在不发；身份两列现在由密钥校验认出来。
+	// cost 段没配，不发 billing 数组；身份两列由密钥校验认出来。
 	if strings.Contains(got.Raw, "billing") {
-		t.Errorf("现在不该发 billing 数组: %s", got.Raw)
+		t.Errorf("没配 cost 段时不该发 billing 数组: %s", got.Raw)
 	}
 	if row.UserID == nil || *row.UserID != 263 {
 		t.Errorf("user_id 是 %v，期望 263: %s", row.UserID, got.Raw)
 	}
 	if row.APIKeyID == nil || *row.APIKeyID != 42 {
 		t.Errorf("api_key_id 是 %v，期望 42: %s", row.APIKeyID, got.Raw)
+	}
+}
+
+// costSection 是追加到配置后面的 cost 段。渠道名与 runnableConfig 里的一致。
+const costSection = `
+cost:
+  channels:
+    example:
+      cost_input_per_million: 1
+      cost_output_per_million: 2
+`
+
+// TestRunPushesBillingWhenCostConfigured 配了 Records 段与 cost 段之后，一条成功调用
+// 在 records 之外还推一行 billing：金额按用量与 upsell 倍率算，两列倍率规则非空。
+func TestRunPushesBillingWhenCostConfigured(t *testing.T) {
+	t.Setenv("TOKENMP_RECORDS_SECRET", "test-secret")
+
+	type billingRow struct {
+		RequestID              string          `json:"request_id"`
+		UserID                 *int64          `json:"user_id"`
+		APIKeyID               *int64          `json:"api_key_id"`
+		Model                  string          `json:"model"`
+		PromptTokens           *int            `json:"prompt_tokens"`
+		CostAmount             float64         `json:"cost_amount"`
+		RevenueAmount          float64         `json:"revenue_amount"`
+		CostMultiplier         float64         `json:"cost_multiplier"`
+		RevenueMultiplier      float64         `json:"revenue_multiplier"`
+		CostMultiplierRules    json.RawMessage `json:"cost_multiplier_rules"`
+		RevenueMultiplierRules json.RawMessage `json:"revenue_multiplier_rules"`
+		Currency               string          `json:"currency"`
+		BillingMode            string          `json:"billing_mode"`
+		Status                 string          `json:"status"`
+	}
+	type batch struct {
+		Records []recordsRow `json:"records"`
+		Billing []billingRow `json:"billing"`
+	}
+	received := make(chan batch, 4)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == apiKeyPath {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"ok":true,"data":{"user_id":263,"api_key_id":42,`+
+				`"model_whitelist":null,"rate_limit_per_min":60,"expires_at":null,`+
+				`"pricing":{"plan_id":3,"pricing_mode":"markup","markup_multiplier":1.15,"prices":[]}}}`)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		var got batch
+		_ = json.Unmarshal(body, &got)
+		received <- got
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(hook.Close)
+
+	upstream := upstreamWithUsage(t)
+	path := configSandbox(t, fmt.Sprintf(runnableConfig, "openai", upstream.URL)+
+		fmt.Sprintf(recordsSection, hook.URL+recordsPath)+costSection)
+
+	address, out, done, cancel := startRun(t, path)
+	defer cancel()
+
+	request, err := http.NewRequest(http.MethodPost, "http://"+address+"/v1/messages",
+		strings.NewReader(`{"model":"gpt-4o","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v\n%s", err, out)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer sk-live")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("转发请求失败: %v\n%s", err, out)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("转发请求的状态码是 %d\n%s", response.StatusCode, out)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("退出时报错: %v\n%s", err, out)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("取消之后服务没有退出")
+	}
+
+	var got batch
+	select {
+	case got = <-received:
+	case <-time.After(5 * time.Second):
+		t.Fatal("摄入端点没有收到记录")
+	}
+	if len(got.Records) != 1 || len(got.Billing) != 1 {
+		t.Fatalf("收到 records=%d billing=%d，期望各 1 行", len(got.Records), len(got.Billing))
+	}
+	bill := got.Billing[0]
+	if bill.RequestID != got.Records[0].RequestID {
+		t.Errorf("billing 的 request_id 是 %q，与 records 的 %q 不一致", bill.RequestID, got.Records[0].RequestID)
+	}
+	// 用量是 prompt 10、completion 5：成本 = (10×1 + 5×2)/1e6，收入再乘 1.15。
+	if math.Abs(bill.CostAmount-20.0/1e6) > 1e-12 {
+		t.Errorf("cost_amount 是 %v，期望 %v", bill.CostAmount, 20.0/1e6)
+	}
+	if math.Abs(bill.RevenueAmount-23.0/1e6) > 1e-12 {
+		t.Errorf("revenue_amount 是 %v，期望 %v", bill.RevenueAmount, 23.0/1e6)
+	}
+	if bill.RevenueMultiplier != 1.15 || bill.BillingMode != "markup" {
+		t.Errorf("revenue_multiplier/billing_mode 是 %v/%q", bill.RevenueMultiplier, bill.BillingMode)
+	}
+	if len(bill.CostMultiplierRules) == 0 || len(bill.RevenueMultiplierRules) == 0 {
+		t.Errorf("两列倍率规则都要非空: %+v", bill)
+	}
+	if bill.Currency != "CNY" || bill.Status != "settled" {
+		t.Errorf("currency/status 是 %q/%q", bill.Currency, bill.Status)
+	}
+	if bill.UserID == nil || *bill.UserID != 263 {
+		t.Errorf("user_id 是 %v", bill.UserID)
 	}
 }
 
