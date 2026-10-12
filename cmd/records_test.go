@@ -407,8 +407,8 @@ func TestRunRejectsBadKeyAndSkipsRecord(t *testing.T) {
 		t.Fatalf("请求失败: %v\n%s", err, out)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusNotFound {
-		t.Fatalf("未知密钥应当回 404，实际 %d\n%s", response.StatusCode, out)
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("未知密钥应当回 401，实际 %d\n%s", response.StatusCode, out)
 	}
 
 	cancel()
