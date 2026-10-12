@@ -260,19 +260,38 @@ func (a *Authorizer) attempt(ctx context.Context, payload []byte) (verification,
 	}
 }
 
-// lookupResponse 是校验端点的成功响应形状。
-//
-// pricing 这段本 issue 不用，不在这里建模（账单是另一件事）。已知字段之外的 JSON
-// 会被忽略，不影响校验。
+// lookupResponse 是校验端点的成功响应形状。已知字段之外的 JSON 会被忽略，不影响校验。
 type lookupResponse struct {
 	OK   bool `json:"ok"`
 	Data *struct {
-		UserID          int64      `json:"user_id"`
-		APIKeyID        int64      `json:"api_key_id"`
-		ModelWhitelist  []string   `json:"model_whitelist"`
-		RateLimitPerMin *int       `json:"rate_limit_per_min"`
-		ExpiresAt       *time.Time `json:"expires_at"`
+		UserID          int64          `json:"user_id"`
+		APIKeyID        int64          `json:"api_key_id"`
+		ModelWhitelist  []string       `json:"model_whitelist"`
+		RateLimitPerMin *int           `json:"rate_limit_per_min"`
+		ExpiresAt       *time.Time     `json:"expires_at"`
+		Pricing         *lookupPricing `json:"pricing"`
 	} `json:"data"`
+}
+
+// lookupPricing 是校验端点响应里的计价口径。字段都可空：没有套餐的用户三个标量都
+// 是 null，prices 是空数组。
+type lookupPricing struct {
+	PlanID           *int64        `json:"plan_id"`
+	PricingMode      *string       `json:"pricing_mode"`
+	MarkupMultiplier *float64      `json:"markup_multiplier"`
+	Prices           []lookupPrice `json:"prices"`
+}
+
+// lookupPrice 是计价口径里一个模型的价。
+type lookupPrice struct {
+	Model                string  `json:"model"`
+	CostMode             string  `json:"cost_mode"`
+	InputPerMillion      float64 `json:"input_per_million"`
+	OutputPerMillion     float64 `json:"output_per_million"`
+	CacheReadPerMillion  float64 `json:"cache_read_per_million"`
+	CacheWritePerMillion float64 `json:"cache_write_per_million"`
+	PerRequest           float64 `json:"per_request"`
+	RequestWeight        float64 `json:"request_weight"`
 }
 
 // decodeSuccess 把 200 的响应翻成校验结果。形状对不上时按端点不可用处理。
@@ -288,11 +307,41 @@ func decodeSuccess(body []byte) (verification, error) {
 		identity: Identity{
 			UserID:   decoded.Data.UserID,
 			APIKeyID: decoded.Data.APIKeyID,
+			Pricing:  pricingOf(decoded.Data.Pricing),
 		},
 		whitelist:       decoded.Data.ModelWhitelist,
 		expiresAt:       decoded.Data.ExpiresAt,
 		rateLimitPerMin: decoded.Data.RateLimitPerMin,
 	}, nil
+}
+
+// pricingOf 把响应里的 pricing 段翻成 Pricing。整段缺失时返回零值。
+func pricingOf(raw *lookupPricing) Pricing {
+	if raw == nil {
+		return Pricing{}
+	}
+	pricing := Pricing{PlanID: raw.PlanID}
+	if raw.PricingMode != nil {
+		pricing.Mode = *raw.PricingMode
+	}
+	if raw.MarkupMultiplier != nil {
+		pricing.MarkupMultiplier = *raw.MarkupMultiplier
+	}
+	if len(raw.Prices) > 0 {
+		pricing.Prices = make(map[string]Price, len(raw.Prices))
+		for _, item := range raw.Prices {
+			pricing.Prices[item.Model] = Price{
+				CostMode:             item.CostMode,
+				InputPerMillion:      item.InputPerMillion,
+				OutputPerMillion:     item.OutputPerMillion,
+				CacheReadPerMillion:  item.CacheReadPerMillion,
+				CacheWritePerMillion: item.CacheWritePerMillion,
+				PerRequest:           item.PerRequest,
+				RequestWeight:        item.RequestWeight,
+			}
+		}
+	}
+	return pricing
 }
 
 // rejection 把失败响应翻成被拒的校验结果。body 里的原因文字只收进 detail，供日志用。
