@@ -12,15 +12,21 @@ func newConfigSetCmd(opts *configOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <路径> <值>",
 		Short: "改一个配置字段",
-		Long: `改一个配置字段。
+		Long: fmt.Sprintf(`改一个配置字段。
 
-只改标量字段：路径必须已经存在，或者属于下面这几个顶层标量。
-顶层标量是 listen、log.format、log.level、plugins.dir。
+只改标量字段：路径必须已经存在，或者属于下面这几个顶层标量，它们文件里没写也能补上。
+%s。
 指向段落或列表的路径会被拒绝，整体替换段落几乎总是笔误。
 
+可改的顶层标量不止这几个，%s 也在内：它们跟着 core 的键表走，文件里没写也能直接补上，
+tokenmp config path 会列出全部。上面这几个单独点名，只是因为白名单由 CLI 自己维护，
+与键表分开盯（见 internal/configmgr 里的 TestSettablePathsAreKnownKeys）。
+
+取值按 core 键表里的类型编码：整数字段给 1048576 会写成数字，不是字符串。
 改写保留注释与缩进，空行可能被规范化。
 写回后重新加载校验，配置不合法就还原原文件。
 因此把 log.level 改成不认识的取值会失败，而不是留下一份坏配置。`,
+			joinList(configmgr.SettablePaths), joinList(configmgr.OtherScalarPaths())),
 		Example: `  tokenmp config set listen 127.0.0.1:8787
   tokenmp config set log.level debug
   tokenmp config set log.format json
