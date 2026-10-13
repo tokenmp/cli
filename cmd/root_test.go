@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"strings"
 	"testing"
 
@@ -22,22 +21,6 @@ func run(t *testing.T, args ...string) (string, error) {
 	root.SetArgs(args)
 
 	err := root.Execute()
-
-	return out.String(), err
-}
-
-// runContext 与 run 一样，但把 context 交给命令。run 这类常驻命令靠它退出。
-func runContext(t *testing.T, ctx context.Context, args ...string) (string, error) {
-	t.Helper()
-
-	root := NewRootCmd()
-
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs(args)
-
-	err := root.ExecuteContext(ctx)
 
 	return out.String(), err
 }

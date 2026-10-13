@@ -1,0 +1,40 @@
+# 门禁用的静态检查配置。
+#
+# 与 core 一样，`default: none` 是刻意的：不用默认集合，而是逐个显式登记，
+# golangci-lint 升级时新增的 linter 不会悄悄进来把门禁变红。
+#
+# 这份清单比 core 的窄，差额是 cli 的存量欠账，不是取舍：mnd/goconst/nestif/
+# noctx/bodyclose/contextcheck/errorlint/gosec 现在一开就是上百条告警（魔术数字、
+# 测试里的裸 http.Get、未关的响应体）。先把这一份立起来，欠账单独清一轮再加回来。
+version: "2"
+
+run:
+  timeout: 5m
+  # 让 _test.go 也参与检查：测试里的未使用符号与错误返回值同等重要。
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # --- 未处理的错误与返回值 ---
+    - errcheck
+
+    # --- 官方静态检查（含并发相关的 lostcancel、copylocks 等）---
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+  settings:
+    errcheck:
+      # 往 cobra 的输出缓冲区写字不是要处理的错误：写不进去只可能是终端已经断了，
+      # 那时命令的退出码已由别的路径决定。不逐个写 `_, _ =`，只是免得它淹没真问题。
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
