@@ -34,7 +34,7 @@ type Scalar struct {
 // Text 返回给人看的取值：生效取值是什么就给什么，没取值时退到键表里的默认值说明。
 func (s Scalar) Text() string {
 	if s.Resolved == nil {
-		return s.Key.Default
+		return s.Default
 	}
 	return fmt.Sprintf("%v", s.Resolved)
 }
