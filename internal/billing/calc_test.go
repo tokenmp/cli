@@ -12,8 +12,7 @@ import (
 	"github.com/tokenmp/cli/internal/clientauth"
 )
 
-// intPtr 与 int64Ptr 造可空字段的指针，与 records 的测试同一写法。
-func intPtr(value int) *int       { return &value }
+// int64Ptr 造可空字段的指针，与 records 的测试同一写法。
 func int64Ptr(value int64) *int64 { return &value }
 
 // testNow 是补时间戳用的固定时刻。
