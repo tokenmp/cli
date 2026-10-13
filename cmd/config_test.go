@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/tokenmp/core/config"
+
+	"github.com/tokenmp/cli/internal/configmgr"
 )
 
 // validConfig 是一份能通过校验的配置，字段故意写得比默认值少，好验证默认值的填充。
@@ -238,6 +240,111 @@ func TestConfigSetRejectsSectionsAndUnknownPaths(t *testing.T) {
 		if _, err := run(t, "config", "set", target, "x", "--config", path); err == nil {
 			t.Errorf("改写 %s 应当被拒绝", target)
 		}
+	}
+
+	// 不在白名单里的路径仍然被拒绝，报错里要能看出哪些路径可以直接补。
+	for _, target := range []string{"nope", "log.nope"} {
+		out, err := run(t, "config", "set", target, "x", "--config", path)
+		if err == nil {
+			t.Errorf("改写 %s 应当被拒绝:\n%s", target, out)
+		}
+		for _, want := range append([]string{"listen", "plugins.dir"}, configmgr.OtherScalarPaths()...) {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s 的报错里应当列出可改写的路径，缺 %q: %v", target, want, err)
+			}
+		}
+	}
+}
+
+// TestConfigSetScalarsOutsideWhitelist 白名单之外的顶层标量照样能改，不必先在文件里写上
+// 一行：白名单只在「文件里整个段落都没有」时起作用 —— 那些字段解出来是空，路径取不到值，
+// 得靠白名单放行。defaults.max_body_bytes 这种带父段落的键，父段落即使没写也在结构树里，
+// 路径本就取得到值，因此直接可改。
+func TestConfigSetScalarsOutsideWhitelist(t *testing.T) {
+	const key = "defaults.max_body_bytes"
+	allowed := map[string]bool{}
+	for _, path := range configmgr.SettablePaths {
+		allowed[path] = true
+	}
+	if allowed[key] {
+		t.Fatalf("%s 不该在白名单里，这条用例就失去意义了", key)
+	}
+
+	path := configSandbox(t, validConfig)
+	if _, err := run(t, "config", "set", key, "1048576", "--config", path); err != nil {
+		t.Fatalf("白名单之外的顶层标量应当能直接改: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("改写后的配置不合法: %v", err)
+	}
+	if cfg.Behavior.MaxBodyBytes == nil || *cfg.Behavior.MaxBodyBytes != 1048576 {
+		t.Errorf("max_body_bytes 是 %v，期望 1048576", cfg.Behavior.MaxBodyBytes)
+	}
+}
+
+// TestConfigSetScalarListFollowsKeys set 的帮助文案里的路径名由 core 的键表现算，
+// 不再手抄一份：白名单与「其余顶层标量」两份加起来正是键表里的顶层标量。
+func TestConfigSetScalarListFollowsKeys(t *testing.T) {
+	out, err := run(t, "config", "set", "--help")
+	if err != nil {
+		t.Fatalf("config set --help: %v\n%s", err, out)
+	}
+	for _, want := range append(append([]string{}, configmgr.SettablePaths...), configmgr.OtherScalarPaths()...) {
+		if !strings.Contains(out, want) {
+			t.Errorf("帮助文案里没有顶层标量 %s:\n%s", want, out)
+		}
+	}
+	// 白名单之外的清单由键表减白名单现算，不该出现键表里没有的路径。
+	for _, key := range configmgr.ScalarKeys() {
+		if !strings.Contains(out, key.Path) {
+			t.Errorf("键表里的顶层标量 %s 没有出现在帮助文案里:\n%s", key.Path, out)
+		}
+	}
+}
+
+// TestConfigSetWritesScalarTypes 改写按 core 键表里的类型编码：整数字段落盘成数字，
+// 时长段照旧写字符串，两者写回后都能重新加载。
+func TestConfigSetWritesScalarTypes(t *testing.T) {
+	path := configSandbox(t, validConfig+`
+defaults:
+  max_body_bytes: 1048576
+`)
+
+	if _, err := run(t, "config", "set", "defaults.max_body_bytes", "2097152", "--config", path); err != nil {
+		t.Fatalf("config set defaults.max_body_bytes: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读配置失败: %v", err)
+	}
+	if !strings.Contains(string(data), "max_body_bytes: 2097152") {
+		t.Errorf("整数要写成数字而不是字符串:\n%s", data)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("改写后的配置不合法: %v", err)
+	}
+	if cfg.Behavior.MaxBodyBytes == nil || *cfg.Behavior.MaxBodyBytes != 2097152 {
+		t.Errorf("max_body_bytes 是 %v，期望 2097152", cfg.Behavior.MaxBodyBytes)
+	}
+
+	// 非整数的取值在写盘之前就被拦下，文件不动。
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读配置失败: %v", err)
+	}
+	if _, err := run(t, "config", "set", "defaults.max_body_bytes", "1MiB", "--config", path); err == nil {
+		t.Fatal("整数字段给 1MiB 应当被拒绝")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读配置失败: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("取值不合法时不该动文件\n改写前:\n%s\n改写后:\n%s", before, after)
 	}
 }
 
@@ -515,7 +622,12 @@ func TestConfigPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config path: %v", err)
 	}
-	for _, want := range []string{path, "已存在"} {
+	// 路径、状态与每一个顶层标量都在字段表里，标量一栏跟着 core 的键表走。
+	wants := []string{path, "已存在", "listen:", "log.format:", "log.level:", "plugins.dir:"}
+	for _, key := range configmgr.ScalarPaths() {
+		wants = append(wants, key+":")
+	}
+	for _, want := range wants {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出里没有 %q:\n%s", want, out)
 		}
@@ -534,7 +646,43 @@ func TestConfigPath(t *testing.T) {
 	if result.Exists {
 		t.Error("不存在的配置文件应当报告 exists=false")
 	}
-	if result.Listen != "127.0.0.1:8787" {
-		t.Errorf("默认 listen 不对: %q", result.Listen)
+	// 文件不存在时每个顶层标量都还在，取值是各自的默认值。
+	for _, key := range configmgr.ScalarPaths() {
+		if _, ok := result.Scalars[key]; !ok {
+			t.Errorf("--json 里缺顶层标量 %s: %s", key, out)
+		}
+	}
+	if result.Scalars["listen"] != "127.0.0.1:8787" {
+		t.Errorf("默认 listen 不对: %v", result.Scalars["listen"])
+	}
+}
+
+// TestConfigPathFollowsKeys 顶层标量的输出由 core 的键表现算：core 加减一个顶层标量时
+// 字段表与 --json 都跟着变，这条盯着两边不漂。
+func TestConfigPathFollowsKeys(t *testing.T) {
+	path := configSandbox(t, validConfig)
+	out, err := run(t, "config", "path", "--config", path, "--json")
+	if err != nil {
+		t.Fatalf("config path --json: %v\n%s", err, out)
+	}
+
+	var result configPathOutput
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("输出不是合法 JSON: %v\n%s", err, out)
+	}
+	if len(result.Scalars) != len(configmgr.ScalarKeys()) {
+		t.Errorf("--json 里有 %d 项顶层标量，键表里有 %d 项: %s",
+			len(result.Scalars), len(configmgr.ScalarKeys()), out)
+	}
+	for _, key := range configmgr.ScalarKeys() {
+		if _, ok := result.Scalars[key.Path]; !ok {
+			t.Errorf("键表里的 %s（类型 %s）没有出现在输出里: %s", key.Path, key.Type, out)
+		}
+	}
+	// 文件里写了的项给出写下的取值，没写的给出填过默认值之后的取值。
+	for _, want := range []string{`"listen": "127.0.0.1:9999"`, `"log.format": "text"`, `"log.level": "info"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--json 里没有 %s:\n%s", want, out)
+		}
 	}
 }

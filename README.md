@@ -248,7 +248,7 @@ $ tokenmp test --model deepseek-chat --prompt 你好 --dialect claude
 
 | 子命令 | 作用 | 示例 |
 | --- | --- | --- |
-| `config path` | 配置文件路径、状态与插件目录 | `tokenmp config path --json` |
+| `config path` | 配置文件路径、状态与顶层标量 | `tokenmp config path --json` |
 | `config show` | 打印生效配置，默认是高亮文本 | `tokenmp config show --format yaml` |
 | `config validate` | 校验并列出全部问题，不通过时退出码 1 | `tokenmp config validate` |
 | `config get <路径>` | 按点分路径取一个字段 | `tokenmp config get channels.0.base_url` |
@@ -320,10 +320,19 @@ $ tokenmp config show
 `get` 的路径与配置文件同形，数字段表示数组下标，可以取到 `channels.0.base_url` 这样的
 嵌套取值。取到的段落或列表按 JSON 输出。
 
+`path` 给出配置文件的绝对路径、是否已存在，以及 `listen`、`log.format`、
+`defaults.max_body_bytes` 这些顶层标量的生效取值 —— 整份配置只取一个值的键。标量一栏由
+core 的键表现算，标了 `（默认值）` 的是文件里没写、由 core 兜底的项；文件不存在时也照常
+输出，因此脚本可以直接从这里取路径。
+
 `set` 只改标量字段：路径必须已经存在，或者属于 `listen`、`log.format`、`log.level`、
-`plugins.dir` 这四个顶层标量。指向段落或列表的路径会被拒绝。改写保留注释与缩进，
-写回后重新加载校验，不合法就还原原文件，因此把 `log.level` 改成不认识的取值会失败，
-而不是留下一份坏配置。
+`plugins.dir` 这四个顶层标量。指向段落或列表的路径会被拒绝。取值按键表里的类型编码，
+整数字段给 `1048576` 会写成数字而不是字符串。改写保留注释与缩进，写回后重新加载校验，
+不合法就还原原文件，因此把 `log.level` 改成不认识的取值会失败，而不是留下一份坏配置。
+
+`init` 写出的骨架由同一份键表现算：`listen`、`log`、`plugins.dir` 这些取 core 的默认值
+（`log.format` 例外，骨架给 `text`，方便刚上手时在终端里看），`channels`、`models` 与
+`plugins.list` 是示例段，要自己改。凭据只写环境变量名，不写密钥。
 
 渠道与模型规则的增删查分别在下面两节。
 
@@ -725,7 +734,7 @@ make clean
 
 ```
 # go.mod，发布构建看到的就是这一行
-require github.com/tokenmp/core v0.5.0
+require github.com/tokenmp/core v0.7.1
 ```
 
 ```
@@ -743,7 +752,7 @@ go work init . && go work use ../core
 ```
 
 两种路径都实测过：带 `go.work` 时 `go list -m -f '{{.Dir}}' github.com/tokenmp/core`
-指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.5.0，`go mod tidy && go build`
+指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.7.1，`go mod tidy && go build`
 直接可用。发布构建因此不需要额外步骤，也不会因为本机存在同级目录而悄悄换掉依赖。
 
 升级 core 时改 `require` 里的版本号，并重跑测试。core 是纯库，`dialect`、`relay`、

@@ -28,6 +28,11 @@ import (
 
 // SettablePaths 是配置里可能还没有、但允许补上的标量路径。已经存在的标量都能改，
 // 这几个只是白名单里额外的项。
+//
+// 它不由 core 的键表生成，键表里没有「是否可 set」这一列：那是 config set 的策略，
+// 不是配置本身的事实，钉进 core 的公开面等于把一条命令行的策略写进库的兼容承诺。
+// 这份名单由 CLI 自己维护，TestSettablePathsAreKnownKeys 盯着它是 config.Keys() 路径
+// 集合的子集，避免白名单里留下键表里已经没有的路径。
 var SettablePaths = []string{"listen", "log.format", "log.level", "plugins.dir"}
 
 // Env 是一次 config 命令用到的上下文。
@@ -385,6 +390,9 @@ func (e *Env) Value(path string) (any, error) {
 // 路径按文件原样解析的那份配置判断存不存在，与 config get 同一套口径。
 // 只接受已经存在的标量路径与 SettablePaths 里的路径。指向段落或列表的路径会被拒绝：
 // 整体替换段落几乎总是笔误，而且会连带删掉里面的注释。
+//
+// 取值按 core 键表里的类型编码之后再写回：整数字段拿到 "1048576" 时写成数字而不是
+// 字符串，否则重新加载会因为类型对不上而失败。
 func (e *Env) Set(path, value string) error {
 	if !e.HasConfig {
 		return fmt.Errorf("配置文件 %s 不存在，用 tokenmp config init 生成一份", e.ConfigPath)
@@ -392,13 +400,21 @@ func (e *Env) Set(path, value string) error {
 	if err := e.checkSettable(path); err != nil {
 		return err
 	}
+	encoded, err := EncodeValue(path, value)
+	if err != nil {
+		return err
+	}
 
-	return configedit.SetScalar(e.ConfigPath, strings.Split(path, "."), value, func() error {
+	return configedit.SetScalar(e.ConfigPath, strings.Split(path, "."), encoded, func() error {
 		return Validate(e.ConfigPath)
 	})
 }
 
 // checkSettable 确认路径可改。
+//
+// 能改的是「取得到值、且不是段落或列表」的路径。core 键表里的顶层标量全都在此列：它们
+// 的父段落即使没写在文件里也在结构树里，因此文件里没写也能直接补上。白名单是这一条之外
+// 的兜底：万一某个键连父段落都取不到，白名单里的那几个仍然放行。
 func (e *Env) checkSettable(path string) error {
 	value, err := e.Value(path)
 	if err == nil {
@@ -416,6 +432,6 @@ func (e *Env) checkSettable(path string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("配置里没有 %s，可改写的路径是 %s，以及任何已经存在的标量字段",
-		path, strings.Join(SettablePaths, "、"))
+	return fmt.Errorf("配置里没有 %s，可改写的路径是 %s 这些顶层标量，以及任何已经存在的标量字段",
+		path, strings.Join(ScalarPaths(), "、"))
 }
