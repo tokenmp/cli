@@ -650,17 +650,32 @@ tokenmp completion powershell | Out-String | Invoke-Expression
 
 ## 构建
 
+工具链版本钉在 [.mise.toml](.mise.toml) 里：Go 1.27 与 golangci-lint 2.14.0。
+第一次 clone 之后先装一次，本机、CI 与容器用的是同一份声明：
+
 ```
-make build     # 产物在 bin/tokenmp
-make install   # 安装到 $GOBIN
-make test      # go test ./...
-make lint      # go vet，装有 golangci-lint 时一起跑
-make fmt
-make tidy
-make clean
+make tools     # mise install
 ```
 
-`make build` 从 git 标签取版本号：HEAD 上有标签时写成 `v0.1.0-3-gabc1234`，
+命令表：
+
+```
+make build      # 编译全部包，不留产物
+make build-bin  # 编译出 bin/tokenmp，并注入版本元数据
+make install    # 安装到 $GOBIN
+make test       # go test -race ./...
+make lint       # go vet + golangci-lint
+make fmt        # golangci-lint fmt
+make fmt-check  # 只看 fmt 会改哪些，有改动就失败
+make tidy       # go mod tidy
+make clean      # 删掉 bin/
+make check      # 门禁：build、test、lint、fmt-check 一起跑
+```
+
+`make check` 与 CI 里跑的是同一条，只依赖 Go 与 golangci-lint，不需要网络、上游服务
+或 node。
+
+`make build-bin` 从 git 标签取版本号：HEAD 上有标签时写成 `v0.1.0-3-gabc1234`，
 没有标签就写 `dev`。提交号取自 `git rev-parse HEAD`，构建时间取自当前 UTC 时间，
 两者和版本号一起用 `-ldflags -X` 注入 [版本元数据](internal/version/version.go)。
 
