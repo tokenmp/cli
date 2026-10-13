@@ -352,7 +352,7 @@ $ tokenmp config show
 
 每个字段当场校验：渠道名不能为空，基址要以 `http://` 或 `https://` 开头，
 超时按 `time.ParseDuration` 的写法解析，最大重试次数在 0 到 10 之间，
-鉴权方式与参数要对得上。全部问完后打印将要写入的条目，再确认一次才落盘。
+鉴权方式与参数要对得上。全部问完后打印将要写入的条目，再确认一次才写入文件。
 写回只改变化过的字段，已有的注释与缩进保留，写回后配置不合法会自动还原。
 
 删除仍被 `models` 段引用的渠道会被拒绝，并列出引用它的规则；被引用的渠道也不能改名。
@@ -390,7 +390,7 @@ $ tokenmp channels list
 
 `tokenmp accounts` 不带子命令时和 `channels` 一样进入分步管理：先打印与 `accounts list`
 相同的表格，再问新建、编辑、删除或退出；每次只写变化过的字段，写回前再确认一次，
-Esc 或 Ctrl-C 不落盘。输出不是终端时打印与 `accounts list` 相同的表格；`--json` 只在
+Esc 或 Ctrl-C 不写入文件。输出不是终端时打印与 `accounts list` 相同的表格；`--json` 只在
 非终端时生效，进交互时报错。
 
 core 要求每个顶层账号都被至少一条渠道引用。新建账号到它被渠道引用之间是一段中间
@@ -433,7 +433,7 @@ $ tokenmp accounts list
 规则按 match、channel、upstream、dialect、affinity 的顺序一个字段一个问题地问。
 channel 只能从配置里已有的渠道里选；match 用 core 的匹配式校验，必须非空；
 upstream 只认 `${model}` 占位符；dialect 的第一项是留空，表示用渠道方言。
-编辑时默认值是当前值，回车即保留。全部问完后打印将要写入的条目，再确认一次才落盘。
+编辑时默认值是当前值，回车即保留。全部问完后打印将要写入的条目，再确认一次才写入文件。
 写回只改变化过的字段，注释与缩进保留。
 
 没有渠道时命令会提示先建渠道；同一条 match 与 channel 组合重复时会拒绝。
@@ -469,7 +469,7 @@ $ tokenmp models list --model deepseek-chat
 | `--from` | 无 | 数据源，目前只支持 `new-api` |
 | `--file` | 无 | 导出的 JSON 路径，渠道在响应信封的 `data.items` 里 |
 | `--config` | `config.yaml` | 配置文件路径 |
-| `--dry-run` | 关 | 只打印将要写入的渠道数、规则数与需要的环境变量名，不落盘 |
+| `--dry-run` | 关 | 只打印将要写入的渠道数、规则数与需要的环境变量名，不写入文件 |
 
 new-api 后台没有导出渠道的入口，列表 JSON 要自己取：
 
@@ -529,7 +529,7 @@ $ tokenmp test --config config.yaml --model gpt-4o
 - OpenAI 兼容的渠道归 `openai`，包含 `1`、`6`、`7`、`9`、`10`、`12`、`13`、`19`、`20`、`22`、`25`、`31`、`40`、`42`、`43`、`47`、`48`、`53`
 - `14` Anthropic 归 `claude`
 - `24` Gemini 与 `41` Vertex AI 归 `gemini`
-- 其余类型（Midjourney、Azure、Perplexity、Cohere、Bedrock 等）不在表里，导入会报错并指出是哪一条渠道，不会静默归到 `openai`
+- 其余类型（Midjourney、Azure、Perplexity、Cohere、Bedrock 等）不在表里，导入会报错并指出是哪一条渠道，不会静默算作 `openai`
 
 `base_url` 带了路径时会按它算出要写进配置的 `path`：`https://openrouter.ai/api` 配 `/v1/chat/completions`，`https://api.openai.com/v1` 配 `/chat/completions`，两种写法指向同一个上游端点。算不出来（例如 Gemini 的路径含模型名）就跳过并说明。`models` 字段按逗号切分，每个模型写一条规则，`channel` 指向该渠道；渠道名重复时跳过并说明，不写重复条目。
 
@@ -614,9 +614,9 @@ tokenmp completion install bash --dir ~/.config/bash-completion/completions
 tokenmp completion install bash --dry-run
 ```
 
-不指定 shell 时按 `$SHELL` 的基名猜，猜不出会报错并列出可选值。落点按 XDG 约定：
+不指定 shell 时按 `$SHELL` 的基名猜，猜不出会报错并列出可选值。写入位置按 XDG 约定：
 
-| shell | 落点 |
+| shell | 写入位置 |
 | --- | --- |
 | bash | `$XDG_DATA_HOME/bash-completion/completions/tokenmp` |
 | zsh | `$XDG_DATA_HOME/zsh/site-functions/_tokenmp` |
@@ -624,10 +624,10 @@ tokenmp completion install bash --dry-run
 | powershell | 没有补全查找目录，只在 `$PROFILE` 里生效，命令只打印提示不写文件 |
 
 `$XDG_DATA_HOME` 默认 `~/.local/share`，`$XDG_CONFIG_HOME` 默认 `~/.config`，
-前三条与 `mise completion --install` 的落点一致。目录不存在时创建，文件已存在时覆盖，
-重复执行结果相同；`--dry-run` 只看将要写入的路径，不落盘。
+前三条与 `mise completion --install` 的写入位置一致。目录不存在时创建，文件已存在时覆盖，
+重复执行结果相同；`--dry-run` 只看将要写入的路径，不写入文件。
 
-zsh 的落点不在默认 `fpath` 里，装完要把下面一行加进 `~/.zshrc`：
+zsh 的写入位置不在默认 `fpath` 里，装完要把下面一行加进 `~/.zshrc`：
 
 ```
 fpath+=${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions
@@ -717,7 +717,7 @@ make clean
 `config` 与 `completion`。fang
 自带的隐藏 `man` 命令在 [cmd/root.go](cmd/root.go) 里关掉了，去掉
 `fang.WithoutManpage()` 一行即可恢复。cobra 的 `completion` 在
-[cmd/completion.go](cmd/completion.go) 里补了中文说明，并挂上 `install` 子命令。
+[cmd/completion.go](cmd/completion.go) 里补了中文说明，并加上 `install` 子命令。
 
 ## 依赖 core 的接线
 
@@ -749,14 +749,3 @@ go work init . && go work use ../core
 升级 core 时改 `require` 里的版本号，并重跑测试。core 是纯库，`dialect`、`relay`、
 `channel`、`plugin`、`config`、`server` 六个包对外可见，公开面一旦发布就是兼容承诺。
 
-## 本机注意
-
-这台机器连不上 `proxy.golang.org` 与 `sum.golang.google.cn`，取模块时会一直卡在
-建立连接上。已在 `~/.config/go/env` 写入下面两项，构建与测试都能正常联网：
-
-```
-GOPROXY=https://goproxy.cn,direct
-GOSUMDB=sum.golang.org
-```
-
-校验数据库的请求由 goproxy.cn 转发，因此 `GOSUMDB` 保持官方取值即可。
