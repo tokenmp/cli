@@ -776,7 +776,7 @@ CGO_ENABLED=0 go build -trimpath -o out/tokenmp .
 
 ```
 # go.mod，发布构建看到的就是这一行
-require github.com/tokenmp/core v0.7.1
+require github.com/tokenmp/core v0.8.2
 ```
 
 ```
@@ -794,7 +794,7 @@ go work init . && go work use ../core
 ```
 
 两种路径都实测过：带 `go.work` 时 `go list -m -f '{{.Dir}}' github.com/tokenmp/core`
-指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.7.1，`go mod tidy && go build`
+指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.8.2，`go mod tidy && go build`
 直接可用。发布构建因此不需要额外步骤，也不会因为本机存在同级目录而悄悄换掉依赖。
 
 升级 core 时改 `require` 里的版本号，并重跑测试。core 是纯库，`dialect`、`relay`、
