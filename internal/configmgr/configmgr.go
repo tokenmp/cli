@@ -30,7 +30,7 @@ import (
 // 这几个只是白名单里额外的项。
 //
 // 它不由 core 的键表生成，键表里没有「是否可 set」这一列：那是 config set 的策略，
-// 不是配置本身的事实，钉进 core 的公开面等于把一条命令行的策略写进库的兼容承诺。
+// 不是配置本身的事实，写进 core 的公开面等于把一条命令行的策略写进库的兼容承诺。
 // 这份名单由 CLI 自己维护，TestSettablePathsAreKnownKeys 盯着它是 config.Keys() 路径
 // 集合的子集，避免白名单里留下键表里已经没有的路径。
 var SettablePaths = []string{"listen", "log.format", "log.level", "plugins.dir"}
