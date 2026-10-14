@@ -681,6 +681,33 @@ make check      # 门禁：build、test、lint、fmt-check 一起跑
 
 直接跑 `go build` 也能得到可用的二进制，只是版本回退到 Go 构建信息。
 
+容器里从零构建还要多设三处，默认取值在容器网络里取不到东西。
+
+依赖源：Go 默认走 `proxy.golang.org`，校验和查 `sum.golang.org`，这两个域名在容器的
+默认桥接网络里都连不上，`go mod download` 会长时间卡在某一跳上。把代理换成容器网络
+内可达的那个，校验和数据库一并关掉：
+
+```
+ENV GOPROXY=<容器网络内可达的代理>,direct
+ENV GOSUMDB=off
+```
+
+GOMODCACHE 只认下载时的 `GOPROXY`，换了源要把缓存目录一起清掉，否则上一跳留下的
+半份还在。`go mod download` 的耗时随代理差得很远，实测同一份依赖清单从几十秒到
+十几分钟都有，构建超时要按最慢的那次留余量。
+
+链接方式：基础镜像用不带 glibc 的 `gcr.io/distroless/static`、`scratch` 或 `alpine`
+时，要显式设 `CGO_ENABLED=0`。Go 默认开着 cgo，编出来的是动态链接的二进制，进容器
+后一启动就报 `no such file or directory`。`make build-bin` 与 `make install` 都没设
+这个变量，容器里直接调 `go build`：
+
+```
+CGO_ENABLED=0 go build -trimpath -o out/tokenmp .
+```
+
+构建上下文只复制本仓库时，还要先删掉 `go.work`：它指向 `../core`，在那个上下文里
+解析不到，`go build` 会直接失败。
+
 ## 目录
 
 | 路径 | 内容 |
