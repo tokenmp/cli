@@ -650,7 +650,7 @@ tokenmp completion powershell | Out-String | Invoke-Expression
 
 ## 构建
 
-工具链版本钉在 [.mise.toml](.mise.toml) 里：Go 1.27 与 golangci-lint 2.14.0。
+工具链版本锁定在 [.mise.toml](.mise.toml) 里：Go 1.27 与 golangci-lint 2.14.0。
 第一次 clone 之后先装一次，本机、CI 与容器用的是同一份声明：
 
 ```
