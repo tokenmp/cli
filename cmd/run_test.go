@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tokenmp/core/dialect"
 )
 
 // runnableConfig 是一份能真正启动的配置：渠道不鉴权，避免启动时要求凭据环境变量。
@@ -69,6 +71,22 @@ func TestRunDryRun(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("启动信息里没有 %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestRunSummaryListsCountTokens 启动信息里的端点清单要有计数端点。
+//
+// 清单是从 dialect 的常量拼的，core 加了端点而这里漏掉时，使用者按启动信息核对
+// 端口会被误导：他会以为这个路径没开。
+func TestRunSummaryListsCountTokens(t *testing.T) {
+	path := configSandbox(t, fmt.Sprintf(runnableConfig, "claude", "https://api.example.com"))
+
+	out, err := run(t, "run", "--dry-run", "--config", path)
+	if err != nil {
+		t.Fatalf("run --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, dialect.ClaudeCountTokensPath) {
+		t.Errorf("启动信息的端点清单里没有 %s:\n%s", dialect.ClaudeCountTokensPath, out)
 	}
 }
 
