@@ -14,7 +14,7 @@ var hookTiming = map[plugin.Hook]struct {
 	Input  string
 	Output string
 }{
-	plugin.HookRequest:   {When: "选路之前", Input: "dialect、model、stream、body", Output: "model、body"},
+	plugin.HookRequest:   {When: "选路之前", Input: "dialect、model、stream、body、headers", Output: "model、body、headers"},
 	plugin.HookEvent:     {When: "每条流式事件写回之前", Input: "dialect、event、data", Output: "event、data"},
 	plugin.HookStreamEnd: {When: "流结束、终止帧写出之前", Input: "dialect、model、usage、events", Output: "events"},
 	plugin.HookResponse:  {When: "非流式响应写回之前", Input: "dialect、model、body", Output: "body"},
