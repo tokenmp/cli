@@ -11,7 +11,7 @@ require (
 	github.com/charmbracelet/x/exp/charmtone v0.0.0-20250603201427-c31516f43444
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/spf13/cobra v1.10.2
-	github.com/tokenmp/core v0.8.2
+	github.com/tokenmp/core v0.8.3
 	golang.org/x/sync v0.22.0
 	gopkg.in/yaml.v3 v3.0.1
 )
