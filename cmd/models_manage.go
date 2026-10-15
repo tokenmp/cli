@@ -31,71 +31,23 @@ type modelForm struct {
 func modelBrowseList() manageList {
 	return manageList{
 		title: "规则",
-		items: modelBrowseItems,
-		remove: func(env *configmgr.Env, index int) (string, error) {
-			_, err := removeModelAt(env, index)
-			if err != nil {
-				return "", err
-			}
-			rule := env.Config.Models[index]
-			return fmt.Sprintf("models.%d（match %s → %s）", index, rule.Match, rule.Channel), nil
+		table: func(env *configmgr.Env) browseTable {
+			return modelTable(modelsOutput{Rules: ruleRows(env.Config)})
+		},
+		items:  modelBrowseItems,
+		create: createModelInteractive,
+		edit:   editModelInteractive,
+		remove: func(cmd *cobra.Command, env *configmgr.Env, index int) error {
+			return deleteModelInteractive(cmd, env, index)
 		},
 	}
 }
 
 // runModelsManage 执行 models 不带子命令时的分步管理流程。
 //
-// 每一轮先打印与 models list 相同的规则表，再问做什么；做完一件回到菜单，
-// 直到用户选退出或在菜单上按 Esc 与 Ctrl-C。字段表单里中断只取消当前这件，
-// 回到菜单，不落盘。退出时文件不动。
+// 流程本身与 accounts、channels 共用 runManage，这里只给规则这一份列表的组装方式。
 func runModelsManage(cmd *cobra.Command, configPath string) error {
-	list := modelBrowseList()
-	for {
-		env, err := configmgr.Load(configPath)
-		if err != nil {
-			return err
-		}
-		if _, err := printModelsRules(cmd, modelsOutput{Rules: ruleRows(env.Config)}); err != nil {
-			return err
-		}
-
-		action, ok, err := askManageAction(cmd, len(env.Config.Models) > 0)
-		if err != nil {
-			return err
-		}
-		if !ok || action == manageQuit {
-			return nil
-		}
-
-		var actionErr error
-		switch action {
-		case manageCreate:
-			actionErr = createModelInteractive(cmd, env)
-		case manageEdit, manageDelete:
-			index, selected, err := askManageIndex(cmd, list, env)
-			if err != nil {
-				return err
-			}
-			if !selected {
-				continue
-			}
-			if err := printManageDetail(cmd, list, env, index); err != nil {
-				return err
-			}
-			if action == manageEdit {
-				actionErr = editModelInteractive(cmd, env, index)
-			} else {
-				actionErr = deleteModelInteractive(cmd, env, index)
-			}
-		}
-
-		switch {
-		case errors.Is(actionErr, errManageCancelled):
-			fmt.Fprintln(out(cmd), palette.label.Render("已取消"))
-		case actionErr != nil:
-			fmt.Fprintln(out(cmd), palette.fail.Render(actionErr.Error()))
-		}
-	}
+	return runManage(cmd, configPath, modelBrowseList())
 }
 
 // createModelInteractive 走完分步表单并追加一条规则。

@@ -91,21 +91,33 @@ upstream 里的占位符按这个模型名替换后给出。没有匹配的规�
 	return cmd
 }
 
+// modelTable 把路由规则整理成表格形态，models list 与交互浏览共用这一份单元格。
+func modelTable(output modelsOutput) browseTable {
+	table := browseTable{
+		headers: []string{"序号", "匹配", "渠道", "上游模型", "方言", "亲和"},
+		empty:   "配置里没有模型路由规则",
+	}
+	for _, rule := range output.Rules {
+		table.rows = append(table.rows, []string{
+			fmt.Sprintf("%d", rule.Index), rule.Match, rule.Channel,
+			upstreamText(rule.Upstream), rule.Dialect, dash(rule.Affinity),
+		})
+	}
+	return table
+}
+
 // printModelsRules 打印路由规则表，models list 与交互模式的非终端退化共用。
 //
 // 第二个返回值报告是否有规则：没有规则时表头也不打印，调用方据此跳过后续的试算表。
 func printModelsRules(cmd *cobra.Command, output modelsOutput) (bool, error) {
 	writer := out(cmd)
-	if len(output.Rules) == 0 {
-		fmt.Fprintln(writer, "配置里没有模型路由规则")
+	table := modelTable(output)
+	if len(table.rows) == 0 {
+		fmt.Fprintln(writer, table.empty)
 		return false, nil
 	}
 
 	fmt.Fprintln(writer, palette.title.Render("路由规则"))
-	rules := newTable().Headers("序号", "匹配", "渠道", "上游模型", "方言", "亲和")
-	for _, rule := range output.Rules {
-		rules.Row(fmt.Sprintf("%d", rule.Index), rule.Match, rule.Channel, upstreamText(rule.Upstream), rule.Dialect, dash(rule.Affinity))
-	}
-	fmt.Fprintln(writer, rules.Render())
+	fmt.Fprintln(writer, table.render(table.all()))
 	return true, nil
 }

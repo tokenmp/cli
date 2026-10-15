@@ -354,7 +354,21 @@ core 的键表现算，标了 `（默认值）` 的是文件里没写、由 core
 `list` 只报告凭据所在的环境变量有没有设置，不读也不打印它的值。缺凭据的渠道会在表下列出。
 
 `tokenmp channels` 不带子命令时进入分步管理。它先打印与 `channels list` 相同的表格，
-再问要做什么：新建、编辑、删除或退出。选编辑或删除时，还要从列表里挑一条。
+再问要做什么：新建、查看、编辑、删除、退出，需要时还有翻页与筛选。
+
+表一屏放不下时按页给，每页 8 条。动作菜单里的上一页与下一页翻页，表头写明
+`第 N 页 / 共 M 页 · 共 K 条`；菜单只在真的有多页时才摆出翻页项，已经在头一页或
+末一页再翻会说明一句「已经是第一页」或「已经是最后一页」，页码不动。
+
+选按名称筛选可以给一个关键字，之后只列名字里含它的渠道，表头补上
+`筛选：名字含 "关键字"`，菜单里原来的筛选项变成「清除筛选（当前 关键字）」，
+选它就回到全量。筛不到任何条目时表下会说明怎么退回去，清除筛选的入口照样留着。
+翻页与筛选都不写文件；换关键字之后从头一页看起。
+
+选查看、编辑或删除后，先从列表里挑一条，再逐字段打印这一条的详情。渠道的详情是
+渠道名、方言、基址、路径、鉴权方式、凭据环境变量、引用账号、请求头名、查询参数名、
+凭据状态、超时、最大重试与请求头 —— 列表里那一列「bearer ← KEY」把鉴权方式与凭据
+来源揉在一起，详情里拆开逐个列出。查看是只读的，看过就回到菜单；编辑与删除接着往下走。
 
 选好动作后，一个字段一个问题地问下去。顺序是渠道名、方言、基址、路径、鉴权方式、
 凭据环境变量名、自定义请求头或查询参数名、超时、最大重试次数。
@@ -371,6 +385,8 @@ core 的键表现算，标了 `（默认值）` 的是文件里没写、由 core
 做完一件回到菜单，可以接着做下一件，选退出才结束。
 在字段表单里按 Esc 或 Ctrl-C 取消当前这件并回到菜单，在动作菜单里按则直接退出，
 两种情况都不改文件。
+
+翻页、筛选与查看全程只读，只有新建、编辑、删除会写文件。
 
 输出不是终端时，`tokenmp channels` 打印与 `channels list` 相同的表格，不做交互。
 `--json` 与交互互斥：管道里给 `--json` 输出 JSON，与 `channels list --json` 相同；
@@ -401,8 +417,9 @@ $ tokenmp channels list
 引用的账号会被拒绝，并列出引用它的渠道与它们在 `channels` 段里的下标。
 
 `tokenmp accounts` 不带子命令时和 `channels` 一样进入分步管理：先打印与 `accounts list`
-相同的表格，再问新建、编辑、删除或退出；每次只写变化过的字段，写回前再确认一次，
-Esc 或 Ctrl-C 不写入文件。输出不是终端时打印与 `accounts list` 相同的表格；`--json` 只在
+相同的表格，再问新建、查看、编辑、删除或退出，需要时还有翻页与按名称筛选；
+每次只写变化过的字段，写回前再确认一次，Esc 或 Ctrl-C 不写入文件。
+翻页、筛选与查看全程只读。输出不是终端时打印与 `accounts list` 相同的表格；`--json` 只在
 非终端时生效，进交互时报错。
 
 core 要求每个顶层账号都被至少一条渠道引用。新建账号到它被渠道引用之间是一段中间
@@ -440,7 +457,9 @@ $ tokenmp accounts list
 规则没有名字，`list` 表里的序号是规则在 `models` 段里的下标，与 `config get models.0` 的口径一致，`delete` 收这个序号。按内容删时给 `match` 的原样写法，规则有多条时用 `--channel` 指定其中一条；删除后打印删掉的那条的匹配式与渠道。`create` 引用了不存在的渠道时报错，同一条 `match` 与 `channel` 组合重复时报错，不覆盖。
 
 `tokenmp models` 不带子命令时同样进入分步管理。它先打印与 `models list` 相同的规则表，
-再问要做什么：新建、编辑、删除或退出。
+再问要做什么：新建、查看、编辑、删除或退出，需要时还有翻页与按名称筛选。
+规则没有名字，筛选按 `list` 表里的标签匹配（`models.N（match 式）`）。
+详情逐字段列出 match、channel、upstream、dialect 与 affinity。
 
 规则按 match、channel、upstream、dialect、affinity 的顺序一个字段一个问题地问。
 channel 只能从配置里已有的渠道里选；match 用 core 的匹配式校验，必须非空；
@@ -452,6 +471,8 @@ upstream 只认 `${model}` 占位符；dialect 的第一项是留空，表示用
 做完一件回到菜单，可以接着做下一件，选退出才结束。
 在字段表单里按 Esc 或 Ctrl-C 取消当前这件并回到菜单，在动作菜单里按则直接退出，
 两种情况都不改文件。
+
+翻页、筛选与查看全程只读，只有新建、编辑、删除会写文件。
 
 输出不是终端时，`tokenmp models` 打印与 `models list` 相同的规则表。
 `--json` 与交互互斥：管道里给 `--json` 输出 JSON，与 `models list --json` 相同；
@@ -738,14 +759,15 @@ CGO_ENABLED=0 go build -trimpath -o out/tokenmp .
 | [cmd/accounts_list.go](cmd/accounts_list.go) | 账号表、凭据状态与引用渠道 |
 | [cmd/accounts_create.go](cmd/accounts_create.go) | 追加账号并校验 |
 | [cmd/accounts_delete.go](cmd/accounts_delete.go) | 删除账号，拒绝删除被引用的账号 |
-| [cmd/accounts_manage.go](cmd/accounts_manage.go) | 账号的分步新建、编辑与删除 |
+| [cmd/accounts_manage.go](cmd/accounts_manage.go) | 账号的分步新建、查看、编辑与删除 |
 | [cmd/channels.go](cmd/channels.go) | `channels` 命令组与渠道整理的共用逻辑 |
 | [cmd/channels_list.go](cmd/channels_list.go) | 渠道表与凭据状态 |
 | [cmd/channels_create.go](cmd/channels_create.go) | 追加渠道并校验 |
 | [cmd/channels_delete.go](cmd/channels_delete.go) | 删除渠道，拒绝删除被引用的渠道 |
 | [cmd/manage.go](cmd/manage.go) | 分步管理的共用流程：动作菜单、选条目与确认 |
-| [cmd/channels_manage.go](cmd/channels_manage.go) | 渠道的分步新建、编辑与删除 |
-| [cmd/models_manage.go](cmd/models_manage.go) | 模型规则的分步新建、编辑与删除 |
+| [cmd/browse.go](cmd/browse.go) | 浏览态：分页、按名称筛选与单条详情 |
+| [cmd/channels_manage.go](cmd/channels_manage.go) | 渠道的分步新建、查看、编辑与删除 |
+| [cmd/models_manage.go](cmd/models_manage.go) | 模型规则的分步新建、查看、编辑与删除 |
 | [cmd/models.go](cmd/models.go) | `models` 命令组与规则整理的共用逻辑 |
 | [cmd/models_list.go](cmd/models_list.go) | 路由规则表与选路试算 |
 | [cmd/models_create.go](cmd/models_create.go) | 追加路由规则 |
