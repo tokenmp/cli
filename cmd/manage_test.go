@@ -836,8 +836,18 @@ func TestManageItemsMatchRows(t *testing.T) {
 	if channels[1].label != "backup" {
 		t.Errorf("渠道条目顺序不对: %+v", channels)
 	}
-	if len(channels[0].detail) != 9 {
-		t.Errorf("渠道详情应当有 9 个字段: %d", len(channels[0].detail))
+	if len(channels[1].detail) != 13 {
+		t.Errorf("渠道详情应当有 13 个字段: %d", len(channels[1].detail))
+	}
+	labels := make(map[string]string, len(channels[1].detail))
+	for _, field := range channels[1].detail {
+		labels[field[0]] = field[1]
+	}
+	// 嵌套的 auth 要展开成四个子字段，而不是揉成一行缩写。
+	for _, want := range []string{"鉴权方式", "凭据环境变量", "引用账号", "请求头名", "查询参数名"} {
+		if _, ok := labels[want]; !ok {
+			t.Errorf("渠道详情里缺少字段 %q: %+v", want, channels[1].detail)
+		}
 	}
 
 	rules := modelBrowseItems(env)

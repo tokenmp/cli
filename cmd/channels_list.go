@@ -53,28 +53,72 @@ path 为空表示按方言取默认路径，timeout 与 max_retries 是填过默
 	return cmd
 }
 
+// channelTable 把渠道整理成表格形态，channels list 与交互浏览共用这一份单元格。
+//
+// 缺凭据的渠道收进表下的说明，只点名这批显示行里的那些。
+func channelTable(cfg *config.Config) browseTable {
+	rows := channelRows(cfg)
+	table := browseTable{
+		headers: []string{"渠道", "方言", "基址", "路径", "鉴权", "凭据", "超时", "重试"},
+		empty:   "配置里没有渠道",
+	}
+	for _, row := range rows {
+		table.rows = append(table.rows, []string{
+			row.Name, row.Dialect, row.BaseURL, dash(row.Path), row.Auth,
+			credentialText(row.Credential), row.Timeout, fmt.Sprintf("%d", row.MaxRetries),
+		})
+	}
+	table.note = missingCredentialNote(credentialEntries(rows))
+	return table
+}
+
+// credentialEntry 是表下说明要用的两项：条目名与它的凭据状态。
+//
+// 状态取未上色的原值：单元格里那份是上好色的，按它比较既会漏掉颜色差异，
+// 也不该让说明的有无取决于终端支不支持颜色。
+type credentialEntry struct {
+	name  string
+	state string
+}
+
+// credentialEntries 从渠道行里取出说明要用的名字与凭据状态。
+func credentialEntries(rows []channelRow) []credentialEntry {
+	entries := make([]credentialEntry, 0, len(rows))
+	for _, row := range rows {
+		entries = append(entries, credentialEntry{name: row.Name, state: row.Credential})
+	}
+	return entries
+}
+
+// missingCredentialNote 生成表下那行「凭据环境变量没有设置」，只点名显示的那些条目。
+func missingCredentialNote(entries []credentialEntry) func(visible []int) string {
+	return func(visible []int) string {
+		var missing []string
+		for _, index := range visible {
+			if entries[index].state == credentialMissing {
+				missing = append(missing, entries[index].name)
+			}
+		}
+		if len(missing) == 0 {
+			return ""
+		}
+		return palette.warn.Render("凭据环境变量没有设置：") + joinList(missing)
+	}
+}
+
 // printChannelsList 打印渠道表与缺凭据提示，channels list 与交互模式的非终端退化共用。
 func printChannelsList(cmd *cobra.Command, cfg *config.Config) error {
-	rows := channelRows(cfg)
+	table := channelTable(cfg)
 
 	writer := out(cmd)
-	if len(rows) == 0 {
-		fmt.Fprintln(writer, "配置里没有渠道")
+	if len(table.rows) == 0 {
+		fmt.Fprintln(writer, table.empty)
 		return nil
 	}
 
-	renderer := newTable().Headers("渠道", "方言", "基址", "路径", "鉴权", "凭据", "超时", "重试")
-	var missing []string
-	for _, row := range rows {
-		if row.Credential == credentialMissing {
-			missing = append(missing, row.Name)
-		}
-		renderer.Row(row.Name, row.Dialect, row.BaseURL, dash(row.Path), row.Auth, credentialText(row.Credential), row.Timeout, fmt.Sprintf("%d", row.MaxRetries))
-	}
-	fmt.Fprintln(writer, renderer.Render())
-
-	if len(missing) > 0 {
-		fmt.Fprintf(writer, "\n%s%s\n", palette.warn.Render("凭据环境变量没有设置："), joinList(missing))
+	fmt.Fprintln(writer, table.render(table.all()))
+	if note := table.noteText(table.all()); note != "" {
+		fmt.Fprintf(writer, "\n%s\n", note)
 	}
 	return nil
 }

@@ -26,66 +26,23 @@ type accountForm struct {
 func accountBrowseList() manageList {
 	return manageList{
 		title: "账号",
-		items: accountBrowseItems,
-		remove: func(env *configmgr.Env, index int) (string, error) {
-			return removeAccountAt(env, index)
+		table: func(env *configmgr.Env) browseTable {
+			return accountTable(accountRows(env.Config))
+		},
+		items:  accountBrowseItems,
+		create: createAccountInteractive,
+		edit:   editAccountInteractive,
+		remove: func(cmd *cobra.Command, env *configmgr.Env, index int) error {
+			return deleteAccountInteractive(cmd, env, index)
 		},
 	}
 }
 
 // runAccountsManage 执行 accounts 不带子命令时的分步管理流程。
 //
-// 每一轮先打印与 accounts list 相同的表格，再问做什么；做完一件回到菜单，
-// 直到用户选退出或在菜单上按 Esc 与 Ctrl-C。字段表单里中断只取消当前这件，
-// 回到菜单，不落盘。退出时文件不动。
+// 流程本身与 channels、models 共用 runManage，这里只给账号这一份列表的组装方式。
 func runAccountsManage(cmd *cobra.Command, configPath string) error {
-	list := accountBrowseList()
-	for {
-		env, err := configmgr.Load(configPath)
-		if err != nil {
-			return err
-		}
-		if err := printAccountsList(cmd, env.Config); err != nil {
-			return err
-		}
-
-		action, ok, err := askManageAction(cmd, len(env.Config.Accounts) > 0)
-		if err != nil {
-			return err
-		}
-		if !ok || action == manageQuit {
-			return nil
-		}
-
-		var actionErr error
-		switch action {
-		case manageCreate:
-			actionErr = createAccountInteractive(cmd, env)
-		case manageEdit, manageDelete:
-			index, selected, err := askManageIndex(cmd, list, env)
-			if err != nil {
-				return err
-			}
-			if !selected {
-				continue
-			}
-			if err := printManageDetail(cmd, list, env, index); err != nil {
-				return err
-			}
-			if action == manageEdit {
-				actionErr = editAccountInteractive(cmd, env, index)
-			} else {
-				actionErr = deleteAccountInteractive(cmd, env, index)
-			}
-		}
-
-		switch {
-		case errors.Is(actionErr, errManageCancelled):
-			fmt.Fprintln(out(cmd), palette.label.Render("已取消"))
-		case actionErr != nil:
-			fmt.Fprintln(out(cmd), palette.fail.Render(actionErr.Error()))
-		}
-	}
+	return runManage(cmd, configPath, accountBrowseList())
 }
 
 // createAccountInteractive 走完分步表单并追加一个账号。

@@ -51,66 +51,23 @@ type channelForm struct {
 func channelBrowseList() manageList {
 	return manageList{
 		title: "渠道",
-		items: channelBrowseItems,
-		remove: func(env *configmgr.Env, index int) (string, error) {
-			return removeChannelAt(env, index)
+		table: func(env *configmgr.Env) browseTable {
+			return channelTable(env.Config)
+		},
+		items:  channelBrowseItems,
+		create: createChannelInteractive,
+		edit:   editChannelInteractive,
+		remove: func(cmd *cobra.Command, env *configmgr.Env, index int) error {
+			return deleteChannelInteractive(cmd, env, index)
 		},
 	}
 }
 
 // runChannelsManage 执行 channels 不带子命令时的分步管理流程。
 //
-// 每一轮先打印与 channels list 相同的表格，再问做什么；做完一件回到菜单，
-// 直到用户选退出或在菜单上按 Esc 与 Ctrl-C。字段表单里中断只取消当前这件，
-// 回到菜单，不落盘。退出时文件不动。
+// 流程本身与 accounts、models 共用 runManage，这里只给渠道这一份列表的组装方式。
 func runChannelsManage(cmd *cobra.Command, configPath string) error {
-	list := channelBrowseList()
-	for {
-		env, err := configmgr.Load(configPath)
-		if err != nil {
-			return err
-		}
-		if err := printChannelsList(cmd, env.Config); err != nil {
-			return err
-		}
-
-		action, ok, err := askManageAction(cmd, len(env.Config.Channels) > 0)
-		if err != nil {
-			return err
-		}
-		if !ok || action == manageQuit {
-			return nil
-		}
-
-		var actionErr error
-		switch action {
-		case manageCreate:
-			actionErr = createChannelInteractive(cmd, env)
-		case manageEdit, manageDelete:
-			index, selected, err := askManageIndex(cmd, list, env)
-			if err != nil {
-				return err
-			}
-			if !selected {
-				continue
-			}
-			if err := printManageDetail(cmd, list, env, index); err != nil {
-				return err
-			}
-			if action == manageEdit {
-				actionErr = editChannelInteractive(cmd, env, index)
-			} else {
-				actionErr = deleteChannelInteractive(cmd, env, index)
-			}
-		}
-
-		switch {
-		case errors.Is(actionErr, errManageCancelled):
-			fmt.Fprintln(out(cmd), palette.label.Render("已取消"))
-		case actionErr != nil:
-			fmt.Fprintln(out(cmd), palette.fail.Render(actionErr.Error()))
-		}
-	}
+	return runManage(cmd, configPath, channelBrowseList())
 }
 
 // createChannelInteractive 走完分步表单并追加一个渠道。
@@ -595,15 +552,26 @@ func channelBrowseItems(env *configmgr.Env) []manageItem {
 	return items
 }
 
-// channelDetail 是渠道的九个详情字段。
+// channelDetail 是渠道的详情字段。
+//
+// 鉴权段展开成子字段逐个列出：列表里那一列「bearer ← KEY」是把 style 与凭据来源
+// 揉在一起的缩写，看详情时该看到配置里的原样，改起来才知道要动哪一个键。
 func channelDetail(record config.Channel, row channelRow) [][2]string {
+	style := record.Auth.Style
+	if style == "" {
+		style = channel.StyleNone
+	}
 	return [][2]string{
 		{"渠道", row.Name},
 		{"方言", row.Dialect},
 		{"基址", row.BaseURL},
 		{"路径", dash(row.Path)},
-		{"鉴权", row.Auth},
-		{"凭据", row.Credential},
+		{"鉴权方式", style},
+		{"凭据环境变量", dash(record.Auth.KeyEnv)},
+		{"引用账号", dash(strings.Join(record.Auth.Accounts, "、"))},
+		{"请求头名", dash(record.Auth.Header)},
+		{"查询参数名", dash(record.Auth.Query)},
+		{"凭据状态", row.Credential},
 		{"超时", row.Timeout},
 		{"最大重试", fmt.Sprintf("%d", row.MaxRetries)},
 		{"请求头", headerNames(record.Headers)},

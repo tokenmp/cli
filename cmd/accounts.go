@@ -42,10 +42,16 @@ delete 拒绝删除仍被渠道引用的账号，并列出引用它的渠道与�
 
 不带子命令时进入分步管理：先打印与 list 相同的表格，再问做什么。
 
-- 先选新建、编辑、删除或退出；编辑与删除还要从列表里选一条
+- 先选新建、查看、编辑、删除或退出；查看、编辑与删除还要从列表里挑一条
+- 表一屏放不下时按页给，动作菜单里有上一页与下一页，表头写明第几页共几页；
+  已经在头一页或末一页时再翻会说明一句，而不是静默不动
+- 选按名称筛选可以只列名字含某个关键字的账号，表头写明正在筛什么，
+  菜单里的清除筛选把它撤掉；筛不到条目时也留着这个入口
+- 查看与编辑之前会逐字段打印这一条的详情
 - 选一项后一个字段一个问题地问下去，编辑时每个字段的默认值是当前值，回车即保留
 - 每次只写变化过的字段，写回前打印将要写入的条目并再确认一次
 - Esc 或 Ctrl-C 中断当前这件，回到菜单；在菜单上中断则退出，两种情况下都不落盘
+- 翻页、筛选、查看全程只读，只有新建、编辑、删除会写文件
 
 输出不是终端时打印与 accounts list 相同的表格，不做交互。--json 只在非终端时生效，
 进交互时报错。凭据一律只写环境变量名，配置文件里不出现密钥。`,
@@ -156,28 +162,36 @@ func accountCredentialState(account config.Account) string {
 	return credentialMissing
 }
 
-// printAccountsList 打印账号表与缺凭据提示，accounts list 与交互模式的非终端退化共用。
+// accountTable 把顶层账号整理成表格形态，accounts list 与交互浏览共用这一份单元格。
+func accountTable(rows []accountRow) browseTable {
+	table := browseTable{
+		headers: []string{"账号", "key_env", "凭据", "引用渠道", "请求头"},
+		empty:   "配置里没有顶层账号",
+	}
+	entries := make([]credentialEntry, 0, len(rows))
+	for _, row := range rows {
+		table.rows = append(table.rows, []string{
+			row.Name, row.KeyEnv, credentialText(row.Credential),
+			dash(strings.Join(row.Channels, "、")), fmt.Sprintf("%d", row.Headers),
+		})
+		entries = append(entries, credentialEntry{name: row.Name, state: row.Credential})
+	}
+	table.note = missingCredentialNote(entries)
+	return table
+}
+
 func printAccountsList(cmd *cobra.Command, cfg *config.Config) error {
-	rows := accountRows(cfg)
+	table := accountTable(accountRows(cfg))
 
 	writer := out(cmd)
-	if len(rows) == 0 {
-		fmt.Fprintln(writer, "配置里没有顶层账号")
+	if len(table.rows) == 0 {
+		fmt.Fprintln(writer, table.empty)
 		return nil
 	}
 
-	renderer := newTable().Headers("账号", "key_env", "凭据", "引用渠道", "请求头")
-	var missing []string
-	for _, row := range rows {
-		if row.Credential == credentialMissing {
-			missing = append(missing, row.Name)
-		}
-		renderer.Row(row.Name, row.KeyEnv, credentialText(row.Credential), dash(strings.Join(row.Channels, "、")), fmt.Sprintf("%d", row.Headers))
-	}
-	fmt.Fprintln(writer, renderer.Render())
-
-	if len(missing) > 0 {
-		fmt.Fprintf(writer, "\n%s%s\n", palette.warn.Render("凭据环境变量没有设置："), joinList(missing))
+	fmt.Fprintln(writer, table.render(table.all()))
+	if note := table.noteText(table.all()); note != "" {
+		fmt.Fprintf(writer, "\n%s\n", note)
 	}
 	return nil
 }
