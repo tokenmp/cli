@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tokenmp/core/dialect"
 )
 
 // lookupStub 是一个假的密钥校验端点，记录收到的密钥与请求头。
@@ -102,7 +104,14 @@ func newFront(t *testing.T, endpoint string, failClosed bool, next http.Handler)
 // postJSON 往前端发一条 OpenAI Chat 请求。
 func postJSON(t *testing.T, url, body, authorization string) (*http.Response, string) {
 	t.Helper()
-	request, err := http.NewRequest(http.MethodPost, url+"/v1/chat/completions", strings.NewReader(body))
+	return postJSONPath(t, url, dialect.OpenAIChat.LocalPath(), body, authorization)
+}
+
+// postJSONPath 往前端发一条指定路径的 JSON 请求。计数端点与 Messages 同形，
+// 走的也是同一条中间件分支。
+func postJSONPath(t *testing.T, url, path, body, authorization string) (*http.Response, string) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, url+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("构造请求失败: %v", err)
 	}
@@ -235,6 +244,100 @@ func TestMiddlewareMissingKey(t *testing.T) {
 	if got := stub.calls.Load(); got != 0 {
 		t.Errorf("没带密钥不该打校验端点，实际打了 %d 次", got)
 	}
+}
+
+// postCountTokens 往前端发一条 Claude Messages 计数端点的请求。
+func postCountTokens(t *testing.T, url, body, authorization string) (*http.Response, string) {
+	t.Helper()
+	return postJSONPath(t, url, dialect.ClaudeCountTokensPath, body, authorization)
+}
+
+// TestMiddlewareCountTokensGuards 计数端点在 HTTP 层要跟 /v1/messages 一个待遇。
+//
+// 这条打的是一整条中间件，不是 dialectOfPath 那张表：路径的归属判对了不等于中间件
+// 用它判了。漏掉它的产物是计数端点从不带密钥的请求也放行 —— 网关配的渠道凭据
+// 就白送给上游了，因此四种行为都在这里钉住。
+func TestMiddlewareCountTokensGuards(t *testing.T) {
+	const body = `{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}`
+
+	t.Run("没带密钥回 401，不调 next、不打校验端点", func(t *testing.T) {
+		stub := newLookupStub(t, func(string) (int, string) { return http.StatusOK, okPayload })
+		called := false
+		next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
+		front, _ := newFront(t, stub.server.URL, true, next)
+
+		response, payload := postCountTokens(t, front.URL, body, "")
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("状态码是 %d，期望 401: %s", response.StatusCode, payload)
+		}
+		if !strings.Contains(payload, "invalid_api_key") {
+			t.Errorf("错误体形状应当与 /v1/messages 一致: %s", payload)
+		}
+		if called {
+			t.Error("没带密钥的请求不该调 next")
+		}
+		if got := stub.calls.Load(); got != 0 {
+			t.Errorf("没带密钥不该打校验端点，实际打了 %d 次", got)
+		}
+	})
+
+	t.Run("带正确密钥放行，身份进 context", func(t *testing.T) {
+		stub := newLookupStub(t, func(string) (int, string) { return http.StatusOK, okPayload })
+		var (
+			called   bool
+			identity Identity
+		)
+		next := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			called = true
+			identity, _ = FromContext(request.Context())
+			writer.WriteHeader(http.StatusOK)
+		})
+		front, _ := newFront(t, stub.server.URL, true, next)
+
+		response, payload := postCountTokens(t, front.URL, body, "Bearer sk-live")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("状态码是 %d，期望 200: %s", response.StatusCode, payload)
+		}
+		if !called {
+			t.Fatal("有效密钥应当放行到下游")
+		}
+		if identity.UserID != 263 || identity.APIKeyID != 42 {
+			t.Errorf("身份是 %+v，期望 263/42", identity)
+		}
+	})
+
+	t.Run("端点不通且 fail_closed 时回 503", func(t *testing.T) {
+		closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		closed.Close()
+
+		front, _ := newFront(t, closed.URL, true, nil)
+		response, payload := postCountTokens(t, front.URL, body, "Bearer sk-live")
+		if response.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("状态码是 %d，期望 503: %s", response.StatusCode, payload)
+		}
+		if !strings.Contains(payload, "identity_unavailable") {
+			t.Errorf("错误体里应当点出身份校验不可用: %s", payload)
+		}
+	})
+
+	t.Run("模型不在白名单时回 403", func(t *testing.T) {
+		stub := newLookupStub(t, func(string) (int, string) {
+			return http.StatusOK, `{"ok":true,"data":{"user_id":1,"api_key_id":2,` +
+				`"model_whitelist":["claude-other"],"rate_limit_per_min":null,"expires_at":null,"pricing":{}}}`
+		})
+		called := false
+		next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
+		front, _ := newFront(t, stub.server.URL, true, next)
+
+		// 计数端点的模型从请求体里读，与 Messages 同一处口径。
+		response, payload := postCountTokens(t, front.URL, body, "Bearer sk-live")
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("状态码是 %d，期望 403: %s", response.StatusCode, payload)
+		}
+		if called {
+			t.Error("名单外的请求不该调 next")
+		}
+	})
 }
 
 // TestMiddlewareWhitelist 模型白名单生效：名单为空不限制，名单内的放行，名单外的拒绝。
