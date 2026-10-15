@@ -71,6 +71,7 @@ cache_ttl 定。校验不通过、或校验端点不通且 fail_closed 为真时
  - /v1/chat/completions，OpenAI Chat
  - /v1/responses，OpenAI Responses
  - /v1/messages，Claude Messages
+ - /v1/messages/count_tokens，Claude Messages 的计数端点，同样是 Claude Messages 方言
  - /v1beta/models/{模型名}:{动作}，Gemini，动作是 generateContent 或 streamGenerateContent
  - /healthz 与 /v1/models
 
@@ -330,6 +331,7 @@ func endpointList() string {
 		dialect.OpenAIChat.LocalPath(),
 		dialect.OpenAIResponses.LocalPath(),
 		dialect.ClaudeMessages.LocalPath(),
+		dialect.ClaudeCountTokensPath,
 		geminiEndpoint,
 		"/healthz",
 		"/v1/models",

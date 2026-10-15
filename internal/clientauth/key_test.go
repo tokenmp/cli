@@ -107,7 +107,7 @@ func TestExtractKey(t *testing.T) {
 	}
 }
 
-// TestDialectOfPath 只有四种模型端点要过校验，其余交给 core。
+// TestDialectOfPath 只有模型端点要过校验，其余交给 core。
 func TestDialectOfPath(t *testing.T) {
 	cases := []struct {
 		path string
@@ -117,6 +117,8 @@ func TestDialectOfPath(t *testing.T) {
 		{"/v1/chat/completions", dialect.OpenAIChat, true},
 		{"/v1/responses", dialect.OpenAIResponses, true},
 		{"/v1/messages", dialect.ClaudeMessages, true},
+		// 计数端点是 Messages 这条路径后面多一段，归同一方言。
+		{dialect.ClaudeCountTokensPath, dialect.ClaudeMessages, true},
 		{"/v1beta/models/gemini-2.0:generateContent", dialect.GeminiGenerate, true},
 		{"/healthz", "", false},
 		{"/v1/models", "", false},
