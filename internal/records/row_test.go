@@ -171,3 +171,26 @@ func TestFromOutcomeLeavesIdentityEmpty(t *testing.T) {
 		t.Errorf("错误文字现在应当留空，实际 %q %q %q", row.ErrorMessage, row.UpstreamMessage, row.PanelMessage)
 	}
 }
+
+// TestFromOutcomeSkipsCountTokens 计数端点不落记录。
+//
+// core 的 handleCountTokens 不重写 request.URL.Path，因此记录层按原始路径判断时
+// 匹配不到它 —— 这是有意为之的：计数请求的响应体只有 input_tokens，没有上游用量，
+// 认下来的话 request_records 里会多出一行 total_tokens 为空的脏记录。
+// entryOf 哪天顺手把计数端点并进 entryMessages，这条会红。
+func TestFromOutcomeSkipsCountTokens(t *testing.T) {
+	if got := entryOf(dialect.ClaudeCountTokensPath); got != "" {
+		t.Errorf("计数端点不该被认成入口，实际 %q", got)
+	}
+
+	// FromOutcome 这条是上面那条的下游后果：Entry 为空，cmd/run.go 里
+	// `if row.Entry == "" { return }` 就把它挡在记录之外。
+	row := FromOutcome(server.Outcome{
+		RequestID: "req_count",
+		Path:      dialect.ClaudeCountTokensPath,
+		Status:    200,
+	}, testNow)
+	if row.Entry != "" {
+		t.Errorf("计数端点的 Entry 应当留空，实际 %q", row.Entry)
+	}
+}
