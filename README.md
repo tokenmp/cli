@@ -67,14 +67,17 @@ TokenMP 转发服务
 包括 `/healthz`、`/v1/models` 与未知路径：
 
 ```
-level=INFO msg=请求进入 request_id=1 method=POST path=/v1/messages client=127.0.0.1 user_agent=curl/8.22.0
-level=INFO msg=请求完成 request_id=1 method=POST path=/v1/messages status=200 duration=2.005676486s model=deepseek-chat channel=a attempts=1
-level=INFO msg=用量统计 request_id=1 model=deepseek-chat channel=a prompt_tokens=500 completion_tokens=6 total_tokens=506 ttft=803.587741ms tps=5
+level=INFO msg=请求进入 request_id=DK2BV7IAAAAACSYFHL6BJKMHUWW7HZVC method=POST path=/v1/messages client=127.0.0.1 user_agent=curl/8.22.0
+level=INFO msg=请求完成 request_id=DK2BV7IAAAAACSYFHL6BJKMHUWW7HZVC method=POST path=/v1/messages status=200 duration=2.005676486s model=deepseek-chat channel=a attempts=1
+level=INFO msg=用量统计 request_id=DK2BV7IAAAAACSYFHL6BJKMHUWW7HZVC model=deepseek-chat channel=a prompt_tokens=500 completion_tokens=6 total_tokens=506 ttft=803.587741ms tps=5
 ```
 
 前两行由 core 写：`请求进入` 在请求进来时写出，`请求完成` 在处理器返回后写出，状态码
 小于 400 记 INFO，其余记 WARN。`attempts` 是这次请求试过的候选路由条数。一次请求产生的
 失败行与完成行共用一个 `request_id`，报错时用它在日志里筛出整条链路。
+
+`request_id` 是 32 个字符的 base32 串，字符集是 `A-Z` 与 `2-7`。它跨进程、跨重启、
+跨实例都不重复，可以当幂等键与对账键用；推送出去的记录与账单靠它关联。
 
 第三行由本工具写：core 通过 `OnRequestDone` 交出原始量，口径定在
 [internal/metrics](internal/metrics/metrics.go)。
@@ -776,7 +779,7 @@ CGO_ENABLED=0 go build -trimpath -o out/tokenmp .
 
 ```
 # go.mod，发布构建看到的就是这一行
-require github.com/tokenmp/core v0.8.2
+require github.com/tokenmp/core v0.8.3
 ```
 
 ```
@@ -794,7 +797,7 @@ go work init . && go work use ../core
 ```
 
 两种路径都实测过：带 `go.work` 时 `go list -m -f '{{.Dir}}' github.com/tokenmp/core`
-指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.8.2，`go mod tidy && go build`
+指向本地目录；新克隆的仓库没有 `go.work`，依赖落到 v0.8.3，`go mod tidy && go build`
 直接可用。发布构建因此不需要额外步骤，也不会因为本机存在同级目录而悄悄换掉依赖。
 
 升级 core 时改 `require` 里的版本号，并重跑测试。core 是纯库，`dialect`、`relay`、
