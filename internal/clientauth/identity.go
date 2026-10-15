@@ -83,13 +83,17 @@ const geminiPrefix = "/v1beta/models/"
 
 // dialectOfPath 按请求路径判断这是哪种方言的模型端点。不是模型端点时返回假值，
 // 校验中间件由此放行 /healthz、/v1/models 与未知路径，交给 core 自己处理。
+//
+// 计数端点单独列一条，归到 Claude Messages：它不是第五种方言，请求体与 Messages
+// 同形，取的也是同一族的客户端密钥。漏掉它的话这条路径会落进「未知路径」那个放行
+// 口，不带密钥就能用网关配的渠道凭据去打上游。
 func dialectOfPath(path string) (dialect.Name, bool) {
 	switch path {
 	case dialect.OpenAIChat.LocalPath():
 		return dialect.OpenAIChat, true
 	case dialect.OpenAIResponses.LocalPath():
 		return dialect.OpenAIResponses, true
-	case dialect.ClaudeMessages.LocalPath():
+	case dialect.ClaudeMessages.LocalPath(), dialect.ClaudeCountTokensPath:
 		return dialect.ClaudeMessages, true
 	}
 	if strings.HasPrefix(path, geminiPrefix) {

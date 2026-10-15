@@ -55,7 +55,7 @@ TokenMP 转发服务
 模型规则: 1 条
 插件:     0 个启用
 插件目录: /etc/tokenmp/plugins（不存在）
-端点:     /v1/chat/completions、/v1/responses、/v1/messages、/v1beta/models/{模型名}:{动作}、/healthz、/v1/models
+端点:     /v1/chat/completions、/v1/responses、/v1/messages、/v1/messages/count_tokens、/v1beta/models/{模型名}:{动作}、/healthz、/v1/models
 
 按 Ctrl-C 停止：先停止接收新连接，再给在途请求最多 10 秒结束。
 ```
@@ -108,6 +108,7 @@ level=INFO msg=用量统计 request_id=DK2BV7IAAAAACSYFHL6BJKMHUWW7HZVC model=de
 | `/v1/chat/completions` | OpenAI Chat |
 | `/v1/responses` | OpenAI Responses |
 | `/v1/messages` | Claude Messages |
+| `/v1/messages/count_tokens` | Claude Messages 的计数端点，同样是 Claude Messages 方言 |
 | `/v1beta/models/{模型名}:{动作}` | Gemini，动作是 `generateContent` 或 `streamGenerateContent` |
 | `/healthz`、`/v1/models` | 存活探测与模型列表 |
 

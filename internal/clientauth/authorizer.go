@@ -107,8 +107,8 @@ func New(opts Options, logger *slog.Logger) *Authorizer {
 
 // Middleware 返回宿主中间件，装进 core 的 server.WithMiddleware。
 //
-// 只拦四种方言的 POST 模型端点；/healthz、/v1/models 与未知路径原样交给 core。
-// 核验通过就把身份挂进 context 再调 next；不通过就自己写错误响应、不调 next。
+// 只拦模型端点的 POST，含 Claude Messages 的计数端点；/healthz、/v1/models 与未知路径
+// 原样交给 core。核验通过就把身份挂进 context 再调 next；不通过就自己写错误响应、不调 next。
 func (a *Authorizer) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		name, ok := dialectOfPath(request.URL.Path)
